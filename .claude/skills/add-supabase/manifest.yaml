@@ -1,0 +1,16 @@
+skill: supabase
+version: 1.0.0
+description: "Supabase MCP integration for docs, database, and development operations"
+core_version: 0.1.0
+adds: []
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+structured:
+  env_additions:
+    - SUPABASE_PROJECT_REF
+    - SUPABASE_ACCESS_TOKEN
+conflicts: []
+depends:
+  - context7
+test: "npx vitest run .claude/skills/add-supabase/tests/supabase.test.ts"

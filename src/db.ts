@@ -1,8 +1,8 @@
-import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import { readEnvFile } from './env.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -12,9 +12,83 @@ import {
   TaskRunLog,
 } from './types.js';
 
-let db: Database.Database;
+interface StatementLike {
+  run(...params: unknown[]): unknown;
+  get(...params: unknown[]): unknown;
+  all(...params: unknown[]): unknown[];
+}
 
-function createSchema(database: Database.Database): void {
+interface DatabaseLike {
+  exec(sql: string): void;
+  prepare(sql: string): StatementLike;
+}
+
+type DatabaseFactory = (pathOrMemory: string) => DatabaseLike;
+type DatabaseEngine = 'better-sqlite3' | 'sqljs-shim';
+
+interface DatabaseRuntime {
+  engine: DatabaseEngine;
+  createDatabase: DatabaseFactory;
+}
+
+const DB_FLAG_KEYS = ['NANOCLAW_USE_SQLITE_SHIM'] as const;
+
+function isTruthy(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  return (
+    normalized === '1' ||
+    normalized === 'true' ||
+    normalized === 'yes' ||
+    normalized === 'on'
+  );
+}
+
+function shouldUseSqliteShim(): boolean {
+  const envFileConfig = readEnvFile([...DB_FLAG_KEYS]);
+  const raw =
+    process.env.NANOCLAW_USE_SQLITE_SHIM ||
+    envFileConfig.NANOCLAW_USE_SQLITE_SHIM;
+  return isTruthy(raw);
+}
+
+async function resolveDatabaseRuntime(): Promise<DatabaseRuntime> {
+  if (shouldUseSqliteShim()) {
+    const sqliteShimModule = await import('./sqlite-shim.js');
+    await sqliteShimModule.default.initialize();
+    logger.info({ engine: 'sqljs-shim' }, 'Database backend selected');
+    return {
+      engine: 'sqljs-shim',
+      createDatabase: sqliteShimModule.default as DatabaseFactory,
+    };
+  }
+
+  let betterSqliteModule: { default: unknown };
+  try {
+    betterSqliteModule = (await import('better-sqlite3')) as {
+      default: unknown;
+    };
+  } catch (err) {
+    throw new Error(
+      `Failed to load better-sqlite3. Install native deps or set NANOCLAW_USE_SQLITE_SHIM=1. ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  const BetterSqliteDatabase = betterSqliteModule.default as unknown as {
+    new (pathOrMemory: string): DatabaseLike;
+  };
+  logger.info({ engine: 'better-sqlite3' }, 'Database backend selected');
+  return {
+    engine: 'better-sqlite3',
+    createDatabase: (pathOrMemory: string): DatabaseLike =>
+      new BetterSqliteDatabase(pathOrMemory),
+  };
+}
+
+const dbRuntime = await resolveDatabaseRuntime();
+
+let db: DatabaseLike;
+
+function createSchema(database: DatabaseLike): void {
   database.exec(`
     CREATE TABLE IF NOT EXISTS chats (
       jid TEXT PRIMARY KEY,
@@ -145,7 +219,7 @@ export function initDatabase(): void {
   const dbPath = path.join(STORE_DIR, 'messages.db');
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
-  db = new Database(dbPath);
+  db = dbRuntime.createDatabase(dbPath);
   createSchema(db);
 
   // Migrate from JSON files if they exist
@@ -154,8 +228,12 @@ export function initDatabase(): void {
 
 /** @internal - for tests only. Creates a fresh in-memory database. */
 export function _initTestDatabase(): void {
-  db = new Database(':memory:');
+  db = dbRuntime.createDatabase(':memory:');
   createSchema(db);
+}
+
+export function getDatabaseEngine(): DatabaseEngine {
+  return dbRuntime.engine;
 }
 
 /**

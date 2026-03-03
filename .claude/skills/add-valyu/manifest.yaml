@@ -1,0 +1,17 @@
+skill: valyu
+version: 1.0.0
+description: "Valyu MCP integration for web search and research"
+core_version: 0.1.0
+adds: []
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+structured:
+  env_additions:
+    - ANTHROPIC_BASE_URL
+    - ANTHROPIC_AUTH_TOKEN
+    - VALYU_API_KEY
+conflicts: []
+depends:
+  - gmail
+test: "npx vitest run .claude/skills/add-valyu/tests/valyu.test.ts"

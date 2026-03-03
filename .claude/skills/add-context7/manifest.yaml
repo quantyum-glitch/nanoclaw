@@ -1,0 +1,15 @@
+skill: context7
+version: 1.0.0
+description: "Context7 MCP integration for version-specific documentation"
+core_version: 0.1.0
+adds: []
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+structured:
+  env_additions:
+    - CONTEXT7_API_KEY
+conflicts: []
+depends:
+  - valyu
+test: "npx vitest run .claude/skills/add-context7/tests/context7.test.ts"

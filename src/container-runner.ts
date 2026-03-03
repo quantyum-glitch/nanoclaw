@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -60,6 +61,7 @@ function buildVolumeMounts(
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
+  const homeDir = os.homedir();
   const groupDir = resolveGroupFolderPath(group.folder);
 
   if (isMain) {
@@ -74,8 +76,8 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Secrets are passed via stdin instead (see readSecrets()).
+    // Shadow .env so the agent cannot read host secrets directly from
+    // the mounted project root. Secrets are passed explicitly via stdin.
     const envFile = path.join(projectRoot, '.env');
     if (fs.existsSync(envFile)) {
       mounts.push({
@@ -161,6 +163,16 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Gmail credentials directory (for Gmail MCP inside the container)
+  const gmailDir = path.join(homeDir, '.gmail-mcp');
+  if (fs.existsSync(gmailDir)) {
+    mounts.push({
+      hostPath: gmailDir,
+      containerPath: '/home/node/.gmail-mcp',
+      readonly: false, // MCP may need to refresh OAuth tokens
+    });
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -220,7 +232,17 @@ function readSecrets(): Record<string, string> {
     'ANTHROPIC_API_KEY',
     'ANTHROPIC_BASE_URL',
     'ANTHROPIC_AUTH_TOKEN',
+    'VALYU_API_KEY',
+    'CONTEXT7_API_KEY',
+    'SUPABASE_ACCESS_TOKEN',
+    'SUPABASE_PROJECT_REF',
+    'POSTHOG_API_KEY',
+    'POSTHOG_HOST',
   ]);
+}
+
+function summarizeSecretKeys(secrets: Record<string, string>): string[] {
+  return Object.keys(secrets).sort();
 }
 
 function buildContainerArgs(
@@ -311,6 +333,14 @@ export async function runContainerAgent(
 
     // Pass secrets via stdin (never written to disk or mounted as files)
     input.secrets = readSecrets();
+    logger.debug(
+      {
+        group: group.name,
+        secretKeys: summarizeSecretKeys(input.secrets),
+        secretCount: Object.keys(input.secrets).length,
+      },
+      'Container secret passthrough configured',
+    );
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
     // Remove secrets from input so they don't appear in logs

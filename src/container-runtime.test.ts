@@ -50,21 +50,45 @@ describe('stopContainer', () => {
 
 describe('ensureContainerRuntimeRunning', () => {
   it('does nothing when runtime is already running', () => {
-    mockExecSync.mockReturnValueOnce('');
+    mockExecSync.mockReturnValueOnce('').mockReturnValueOnce('');
 
     ensureContainerRuntimeRunning();
 
-    expect(mockExecSync).toHaveBeenCalledTimes(1);
-    expect(mockExecSync).toHaveBeenCalledWith(`${CONTAINER_RUNTIME_BIN} info`, {
-      stdio: 'pipe',
-      timeout: 10000,
-    });
+    expect(mockExecSync).toHaveBeenCalledTimes(2);
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      1,
+      `${CONTAINER_RUNTIME_BIN} --version`,
+      {
+        stdio: 'pipe',
+        timeout: 10000,
+      },
+    );
+    expect(mockExecSync).toHaveBeenNthCalledWith(
+      2,
+      `${CONTAINER_RUNTIME_BIN} info`,
+      {
+        stdio: 'pipe',
+        timeout: 10000,
+      },
+    );
     expect(logger.debug).toHaveBeenCalledWith(
       'Container runtime already running',
     );
   });
 
+  it('throws a clear error when docker CLI is missing', () => {
+    mockExecSync.mockImplementationOnce(() => {
+      throw new Error('command not found');
+    });
+
+    expect(() => ensureContainerRuntimeRunning()).toThrow(
+      'Container runtime CLI is missing',
+    );
+    expect(logger.error).toHaveBeenCalled();
+  });
+
   it('throws when docker info fails', () => {
+    mockExecSync.mockReturnValueOnce('');
     mockExecSync.mockImplementationOnce(() => {
       throw new Error('Cannot connect to the Docker daemon');
     });

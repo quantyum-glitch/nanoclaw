@@ -81,6 +81,13 @@ From the main channel (your self-chat), you can manage groups and tasks:
 @Andy join the Family Chat group
 ```
 
+Quick LLM utility commands (from chat):
+```
+/free-models
+/debate Compare these 3 implementation options...
+/llm-help
+```
+
 ## Customizing
 
 NanoClaw doesn't use configuration files. To make changes, just tell Claude Code what you want:
@@ -118,6 +125,9 @@ Skills we'd like to see:
 - Node.js 20+
 - [Claude Code](https://claude.ai/download)
 - [Apple Container](https://github.com/apple/container) (macOS) or [Docker](https://docker.com/products/docker-desktop) (macOS/Linux)
+
+Windows users: run NanoClaw in WSL2. See [docs/WSL2_SETUP.md](docs/WSL2_SETUP.md).
+Optional native DB compatibility shim is available behind `NANOCLAW_USE_SQLITE_SHIM=1`.
 
 ## Architecture
 
@@ -197,6 +207,18 @@ Questions? Ideas? [Join the Discord](https://discord.gg/VDdww8qS42).
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md) for breaking changes and migration notes.
+
+## Fork Maintenance
+
+For keeping your fork in sync with upstream, see [docs/UPSTREAM_SYNC.md](docs/UPSTREAM_SYNC.md).
+
+## Workflow Docs
+
+- OpenCode/OpenRouter: [docs/OPENCODE_OPENROUTER.md](docs/OPENCODE_OPENROUTER.md)
+- Coding agents (Cline/Gemini/Aider): [docs/CODING_AGENTS.md](docs/CODING_AGENTS.md)
+- Free multi-LLM critique flow: [docs/FREE_LLM_DEBATE.md](docs/FREE_LLM_DEBATE.md)
+- Brains roadmap and safe ports from 2NanoClaw: [docs/BRAINS_PLAN.md](docs/BRAINS_PLAN.md)
+- Observability logging: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
 
 ## License
 

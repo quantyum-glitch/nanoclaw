@@ -27,6 +27,7 @@ import {
   getAllRegisteredGroups,
   getAllSessions,
   getAllTasks,
+  getDatabaseEngine,
   getMessagesSince,
   getNewMessages,
   getRouterState,
@@ -40,6 +41,13 @@ import {
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
+import { llmCommandHelpText, parseLlmCommand } from './llm-commands.js';
+import {
+  formatDebateMessage,
+  formatFreeModelsMessage,
+  listOpenRouterFreeModels,
+  runOpenRouterDebate,
+} from './openrouter-debate.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -162,13 +170,48 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   const prompt = formatMessages(missedMessages);
-
-  // Advance cursor so the piping path in startMessageLoop won't re-fetch
-  // these messages. Save the old cursor so we can roll back on error.
+  // Advance cursor so messages are marked handled before command/container work.
+  // Rollback is only needed for container-agent failures (see below).
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
     missedMessages[missedMessages.length - 1].timestamp;
   saveState();
+
+  const latestMessage = missedMessages[missedMessages.length - 1];
+  const llmCommand = parseLlmCommand(latestMessage.content, TRIGGER_PATTERN);
+  if (llmCommand) {
+    try {
+      if (llmCommand.type === 'help') {
+        await channel.sendMessage(chatJid, llmCommandHelpText());
+        return true;
+      }
+
+      if (llmCommand.type === 'list-free-models') {
+        await channel.sendMessage(
+          chatJid,
+          'Checking current free OpenRouter models...',
+        );
+        const models = await listOpenRouterFreeModels(20);
+        await channel.sendMessage(chatJid, formatFreeModelsMessage(models));
+        return true;
+      }
+
+      await channel.sendMessage(
+        chatJid,
+        'Running multi-model critique/fight now. This can take up to ~90 seconds.',
+      );
+      const debate = await runOpenRouterDebate(llmCommand.prompt);
+      await channel.sendMessage(chatJid, formatDebateMessage(debate));
+      return true;
+    } catch (err) {
+      logger.error({ chatJid, err }, 'LLM command failed');
+      await channel.sendMessage(
+        chatJid,
+        `LLM command failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return true;
+    }
+  }
 
   logger.info(
     { group: group.name, messageCount: missedMessages.length },
@@ -395,6 +438,18 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
+          const latestPendingMessage =
+            messagesToSend[messagesToSend.length - 1];
+          const pendingCommand = parseLlmCommand(
+            latestPendingMessage.content,
+            TRIGGER_PATTERN,
+          );
+          if (pendingCommand) {
+            // Force command handling through processGroupMessages (host-side),
+            // even if a container is currently active for this group.
+            queue.enqueueMessageCheck(chatJid);
+            continue;
+          }
           const formatted = formatMessages(messagesToSend);
 
           if (queue.sendMessage(chatJid, formatted)) {
@@ -450,7 +505,15 @@ function ensureContainerSystemRunning(): void {
 async function main(): Promise<void> {
   ensureContainerSystemRunning();
   initDatabase();
-  logger.info('Database initialized');
+  logger.info(
+    {
+      dbEngine: getDatabaseEngine(),
+      pid: process.pid,
+      platform: process.platform,
+      nodeVersion: process.version,
+    },
+    'Database initialized',
+  );
   loadState();
 
   // Graceful shutdown handlers
@@ -496,6 +559,13 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+  logger.info(
+    {
+      channels: channels.map((channel) => channel.name),
+      channelCount: channels.length,
+    },
+    'Channels connected',
+  );
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({

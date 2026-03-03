@@ -362,6 +362,7 @@ async function runQuery(
   sdkEnv: Record<string, string | undefined>,
   resumeAt?: string,
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
+  const queryStart = Date.now();
   const stream = new MessageStream();
   stream.push(prompt);
 
@@ -414,6 +415,83 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const allowedTools = [
+    'Bash',
+    'Read', 'Write', 'Edit', 'Glob', 'Grep',
+    'WebSearch', 'WebFetch',
+    'Task', 'TaskOutput', 'TaskStop',
+    'TeamCreate', 'TeamDelete', 'SendMessage',
+    'TodoWrite', 'ToolSearch', 'Skill',
+    'NotebookEdit',
+    'mcp__nanoclaw__*',
+    'mcp__gmail__*',
+  ];
+
+  const mcpServers: Record<string, any> = {
+    nanoclaw: {
+      command: 'node',
+      args: [mcpServerPath],
+      env: {
+        NANOCLAW_CHAT_JID: containerInput.chatJid,
+        NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
+        NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+      },
+    },
+    gmail: {
+      command: 'npx',
+      args: ['-y', '@gongrzhe/server-gmail-autoauth-mcp'],
+    },
+  };
+
+  const valyuApiKey = sdkEnv.VALYU_API_KEY;
+  if (valyuApiKey) {
+    mcpServers.valyu = {
+      type: 'http',
+      url: `https://mcp.valyu.network/mcp?valyuApiKey=${encodeURIComponent(valyuApiKey)}`,
+    };
+    allowedTools.push('mcp__valyu__*');
+    log('Valyu MCP configured');
+  }
+
+  const context7ApiKey = sdkEnv.CONTEXT7_API_KEY;
+  if (context7ApiKey) {
+    mcpServers.context7 = {
+      command: 'npx',
+      args: ['-y', '@upstash/context7-mcp', '--api-key', context7ApiKey],
+    };
+    allowedTools.push('mcp__context7__*');
+    log('Context7 MCP configured');
+  }
+
+  const supabaseProjectRef = sdkEnv.SUPABASE_PROJECT_REF;
+  const supabaseAccessToken = sdkEnv.SUPABASE_ACCESS_TOKEN;
+  if (supabaseProjectRef && supabaseAccessToken) {
+    mcpServers.supabase = {
+      type: 'http',
+      url: `https://mcp.supabase.com/mcp?project_ref=${encodeURIComponent(supabaseProjectRef)}&features=docs,database,development`,
+      headers: {
+        Authorization: `Bearer ${supabaseAccessToken}`,
+      },
+    };
+    allowedTools.push('mcp__supabase__*');
+    log('Supabase MCP configured');
+  }
+
+  const posthogApiKey = sdkEnv.POSTHOG_API_KEY;
+  const posthogHost = sdkEnv.POSTHOG_HOST || 'https://us.i.posthog.com';
+  if (posthogApiKey) {
+    mcpServers.posthog = {
+      type: 'http',
+      url: `https://mcp.posthog.com/sse?api_key=${encodeURIComponent(posthogApiKey)}&host=${encodeURIComponent(posthogHost)}`,
+    };
+    allowedTools.push('mcp__posthog__*');
+    log('PostHog MCP configured');
+  }
+
+  const enabledMcpServers = Object.keys(mcpServers).sort();
+  log(`MCP servers enabled (${enabledMcpServers.length}): ${enabledMcpServers.join(', ')}`);
+  log(`Allowed tool patterns (${allowedTools.length})`);
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -424,31 +502,12 @@ async function runQuery(
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
-      allowedTools: [
-        'Bash',
-        'Read', 'Write', 'Edit', 'Glob', 'Grep',
-        'WebSearch', 'WebFetch',
-        'Task', 'TaskOutput', 'TaskStop',
-        'TeamCreate', 'TeamDelete', 'SendMessage',
-        'TodoWrite', 'ToolSearch', 'Skill',
-        'NotebookEdit',
-        'mcp__nanoclaw__*'
-      ],
+      allowedTools,
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
-      mcpServers: {
-        nanoclaw: {
-          command: 'node',
-          args: [mcpServerPath],
-          env: {
-            NANOCLAW_CHAT_JID: containerInput.chatJid,
-            NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
-            NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
-          },
-        },
-      },
+      mcpServers,
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
         PreToolUse: [{ matcher: 'Bash', hooks: [createSanitizeBashHook()] }],
@@ -486,7 +545,8 @@ async function runQuery(
   }
 
   ipcPolling = false;
-  log(`Query done. Messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
+  const durationMs = Date.now() - queryStart;
+  log(`Query done. Duration: ${durationMs}ms, messages: ${messageCount}, results: ${resultCount}, lastAssistantUuid: ${lastAssistantUuid || 'none'}, closedDuringQuery: ${closedDuringQuery}`);
   return { newSessionId, lastAssistantUuid, closedDuringQuery };
 }
 
@@ -586,3 +646,4 @@ async function main(): Promise<void> {
 }
 
 main();
+

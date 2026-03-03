@@ -1,0 +1,16 @@
+skill: posthog
+version: 1.0.0
+description: "PostHog MCP integration for product analytics queries"
+core_version: 0.1.0
+adds: []
+modifies:
+  - src/container-runner.ts
+  - container/agent-runner/src/index.ts
+structured:
+  env_additions:
+    - POSTHOG_API_KEY
+    - POSTHOG_HOST
+conflicts: []
+depends:
+  - supabase
+test: "npx vitest run .claude/skills/add-posthog/tests/posthog.test.ts"
