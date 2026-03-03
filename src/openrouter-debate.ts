@@ -175,7 +175,9 @@ export async function listOpenRouterFreeModels(
   maxModels = 20,
 ): Promise<FreeModel[]> {
   const config = loadOpenRouterConfig(false);
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
   if (config.apiKey) {
     headers.Authorization = `Bearer ${config.apiKey}`;
   }
@@ -188,7 +190,9 @@ export async function listOpenRouterFreeModels(
 
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(`OpenRouter models API failed (${response.status}): ${text}`);
+    throw new Error(
+      `OpenRouter models API failed (${response.status}): ${text}`,
+    );
   }
 
   const payload = (await response.json()) as OpenRouterModelsResponse;
@@ -203,7 +207,9 @@ export async function listOpenRouterFreeModels(
     }));
 }
 
-export async function runOpenRouterDebate(prompt: string): Promise<DebateResult> {
+export async function runOpenRouterDebate(
+  prompt: string,
+): Promise<DebateResult> {
   const config = loadOpenRouterConfig(true);
   const primaryModel = config.debateModels[0];
   const criticModels = config.debateModels.slice(1);
@@ -304,7 +310,10 @@ export function formatFreeModelsMessage(models: FreeModel[]): string {
     lines.push(`• ${model.id} (ctx=${model.contextLength})`);
   }
 
-  const recommended = models.slice(0, 4).map((m) => m.id).join(',');
+  const recommended = models
+    .slice(0, 4)
+    .map((m) => m.id)
+    .join(',');
   if (recommended) {
     lines.push('');
     lines.push(`Suggested OPENROUTER_DEBATE_MODELS=${recommended}`);

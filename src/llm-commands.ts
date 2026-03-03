@@ -34,11 +34,7 @@ export function parseLlmCommand(
     return { type: 'list-free-models' };
   }
 
-  if (
-    command === 'debate' ||
-    command === 'fight' ||
-    command === 'critique'
-  ) {
+  if (command === 'debate' || command === 'fight' || command === 'critique') {
     if (!rest) return { type: 'help' };
     return { type: 'debate', prompt: rest };
   }

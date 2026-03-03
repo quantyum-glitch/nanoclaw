@@ -24,7 +24,9 @@ export function stopContainer(name: string): string {
 
 function printRuntimeFailure(helpLines: string[]): void {
   console.error('');
-  console.error('==============================================================');
+  console.error(
+    '==============================================================',
+  );
   console.error('FATAL: Container runtime failed to start');
   console.error('');
   console.error('Agents cannot run without a Linux container runtime.');
@@ -35,7 +37,9 @@ function printRuntimeFailure(helpLines: string[]): void {
   for (const line of helpLines) {
     console.error(line);
   }
-  console.error('==============================================================');
+  console.error(
+    '==============================================================',
+  );
   console.error('');
 }
 
