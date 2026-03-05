@@ -38,6 +38,19 @@ interface OpenRouterConfig {
   synthModel: string;
 }
 
+export interface OpenRouterChatMessage {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface OpenRouterChatCallResult {
+  model: string;
+  content: string;
+  latencyMs: number;
+  promptTokens: number;
+  completionTokens: number;
+}
+
 export interface FreeModel {
   id: string;
   contextLength: number;
@@ -131,11 +144,12 @@ function loadOpenRouterConfig(requireApiKey: boolean): OpenRouterConfig {
   return { apiKey, baseUrl, debateModels, synthModel };
 }
 
-async function openRouterChat(
-  config: OpenRouterConfig,
+export async function callOpenRouterChat(
+  config: { apiKey: string; baseUrl: string },
   model: string,
-  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
-): Promise<DebateRun> {
+  messages: OpenRouterChatMessage[],
+  opts?: { timeoutMs?: number; temperature?: number },
+): Promise<OpenRouterChatCallResult> {
   const startedAt = Date.now();
   const response = await fetch(`${config.baseUrl}/chat/completions`, {
     method: 'POST',
@@ -146,9 +160,9 @@ async function openRouterChat(
     body: JSON.stringify({
       model,
       messages,
-      temperature: 0.3,
+      temperature: opts?.temperature ?? 0.3,
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(opts?.timeoutMs ?? 90_000),
   });
 
   if (!response.ok) {
@@ -164,10 +178,28 @@ async function openRouterChat(
 
   return {
     model,
-    text: content,
+    content,
     latencyMs: Date.now() - startedAt,
     promptTokens: payload.usage?.prompt_tokens || 0,
     completionTokens: payload.usage?.completion_tokens || 0,
+  };
+}
+
+async function openRouterChat(
+  config: OpenRouterConfig,
+  model: string,
+  messages: OpenRouterChatMessage[],
+): Promise<DebateRun> {
+  const result = await callOpenRouterChat(config, model, messages, {
+    temperature: 0.3,
+    timeoutMs: 90_000,
+  });
+  return {
+    model: result.model,
+    text: result.content,
+    latencyMs: result.latencyMs,
+    promptTokens: result.promptTokens,
+    completionTokens: result.completionTokens,
   };
 }
 

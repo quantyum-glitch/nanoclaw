@@ -431,6 +431,70 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
 }
 
+export interface ConversationWindowMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export function getConversationWindow(
+  chatJid: string,
+  maxMessages: number,
+  maxChars: number,
+): ConversationWindowMessage[] {
+  const rows = db
+    .prepare(
+      `
+      SELECT content, timestamp, is_bot_message
+      FROM messages
+      WHERE chat_jid = ? AND content IS NOT NULL AND content != ''
+      ORDER BY timestamp DESC
+      LIMIT ?
+    `,
+    )
+    .all(chatJid, Math.max(maxMessages * 4, 50)) as Array<{
+    content: string;
+    timestamp: string;
+    is_bot_message: number;
+  }>;
+
+  let charCount = 0;
+  const selected: ConversationWindowMessage[] = [];
+  const assistantPrefix = `${ASSISTANT_NAME}:`;
+
+  for (const row of rows) {
+    if (selected.length >= maxMessages) break;
+
+    const raw = row.content.trim();
+    if (!raw) continue;
+
+    const isAssistant =
+      row.is_bot_message === 1 || raw.startsWith(assistantPrefix);
+    const content = isAssistant
+      ? raw.startsWith(assistantPrefix)
+        ? raw.slice(assistantPrefix.length).trim()
+        : raw
+      : raw;
+
+    if (!content) continue;
+
+    const nextCount = charCount + content.length;
+    if (nextCount > maxChars && selected.length > 0) {
+      break;
+    }
+
+    const clipped = content.slice(0, Math.max(1, maxChars - charCount));
+    selected.push({
+      role: isAssistant ? 'assistant' : 'user',
+      content: clipped,
+      timestamp: row.timestamp,
+    });
+    charCount += clipped.length;
+  }
+
+  return selected.reverse();
+}
+
 export function createTask(
   task: Omit<ScheduledTask, 'last_run' | 'last_result'>,
 ): void {

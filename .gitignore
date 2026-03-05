@@ -21,6 +21,9 @@ groups/global/*
 # Secrets
 *.keys.json
 .env
+.bundle
+*.bundle
+*.ncbundle
 
 # Temp files
 .tmp-*

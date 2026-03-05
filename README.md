@@ -85,7 +85,16 @@ Quick LLM utility commands (from chat):
 ```
 /free-models
 /debate Compare these 3 implementation options...
+/code Write a TypeScript migration with tests
+/twitter-summary
 /llm-help
+```
+
+One-file migration bundle (move setup to another machine):
+```bash
+npm run bundle:export -- --out nanoclaw-setup.bundle --passphrase "your-passphrase"
+# On the target machine, in the cloned repo:
+npm run bundle:import -- --in nanoclaw-setup.bundle --passphrase "your-passphrase"
 ```
 
 ## Customizing

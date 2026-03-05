@@ -30,6 +30,37 @@ describe('parseLlmCommand', () => {
     });
   });
 
+  it('parses code command with prompt', () => {
+    expect(parseLlmCommand('/code write a migration script', trigger)).toEqual({
+      type: 'code',
+      prompt: 'write a migration script',
+    });
+  });
+
+  it('parses twitter summary command variants', () => {
+    expect(parseLlmCommand('/twitter-summary', trigger)).toEqual({
+      type: 'twitter-summary',
+    });
+    expect(parseLlmCommand('*top-tweets', trigger)).toEqual({
+      type: 'twitter-summary',
+    });
+    expect(parseLlmCommand('@Andy twitter summary', trigger)).toEqual({
+      type: 'twitter-summary',
+    });
+  });
+
+  it('parses twitter refresh command variants', () => {
+    expect(parseLlmCommand('/twitter-now', trigger)).toEqual({
+      type: 'twitter-refresh',
+    });
+    expect(parseLlmCommand('*twitter-refresh', trigger)).toEqual({
+      type: 'twitter-refresh',
+    });
+    expect(parseLlmCommand('@Andy twitter now', trigger)).toEqual({
+      type: 'twitter-refresh',
+    });
+  });
+
   it('returns null for non-command text', () => {
     expect(parseLlmCommand('hello there', trigger)).toBeNull();
   });

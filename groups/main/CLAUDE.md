@@ -35,6 +35,8 @@ Use these patterns when the user asks for recurring reports:
 The host runtime intercepts these commands directly (no normal agent run):
 - `/free-models` or `*free-models` - list current free OpenRouter models
 - `/debate <prompt>` or `*debate <prompt>` - run multi-model critique/fight and return synthesis
+- `/twitter-summary` or `*top-tweets` - show cached Twitter/X list summary (if configured)
+- `/twitter-now` or `*twitter-refresh` - refresh Twitter/X summary then show it
 - `/llm-help` - show command help
 
 Use these when the user explicitly asks for free-model discovery or model-vs-model critique.
@@ -69,6 +71,9 @@ When you learn something important:
 - Create files for structured data (e.g., `customers.md`, `preferences.md`)
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
+
+Known hardware context:
+- The old ASUS U56E machine uses an aging HDD. Prefer low-write patterns and avoid unnecessary disk churn on that host.
 
 ## WhatsApp Formatting (and other messaging apps)
 

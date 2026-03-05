@@ -14,9 +14,19 @@ Optional defaults:
 
 ```bash
 export OPENROUTER_BASE_URL="https://openrouter.ai/api/v1"
+export OPENROUTER_MODEL_GENERAL="openrouter/free"
+export OPENROUTER_MODEL_CODE="openrouter/anthropic/claude-sonnet-4-5"
+export OPENROUTER_FAILURE_THRESHOLD="3"
+export OPENROUTER_COOLDOWN_MS="600000"
+export OPENROUTER_HISTORY_MAX_MESSAGES="20"
+export OPENROUTER_HISTORY_MAX_CHARS="6000"
+export TWITTER_SUMMARY_FILE="$HOME/Documents/nanoclaw/data/twitter-list/summary.txt"
+export TWITTER_SUMMARY_REFRESH_COMMAND="$HOME/Documents/nanoclaw/scripts/twitter-monitor/scheduler.sh"
 export OPENROUTER_DEBATE_MODELS="openrouter/free,meta-llama/llama-3.3-70b-instruct:free,qwen/qwen3-coder:free"
 export OPENROUTER_SYNTH_MODEL="openrouter/free"
 ```
+
+OpenRouter and Gemini free tiers are quota/rate limited. There is no guaranteed infinite free inference.
 
 ## 2. Run Multi-LLM Critique First
 
@@ -36,7 +46,7 @@ Use the synthesis output as the prompt you give to OpenCode/Cline/Gemini.
 
 ## 4. Local NanoClaw Runtime Variables
 
-For Anthropic-compatible routing in NanoClaw runner:
+For Anthropic-compatible container fallback in NanoClaw runner:
 
 ```bash
 ANTHROPIC_BASE_URL=...

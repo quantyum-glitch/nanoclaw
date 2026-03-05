@@ -6,6 +6,7 @@ import {
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
+  getConversationWindow,
   getMessagesSince,
   getNewMessages,
   getTaskById,
@@ -224,6 +225,93 @@ describe('getMessagesSince', () => {
       'Andy',
     );
     expect(msgs).toHaveLength(0);
+  });
+});
+
+describe('getConversationWindow', () => {
+  it('returns user and assistant messages in chronological order', () => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 'c1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'hello',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    storeMessage({
+      id: 'c2',
+      chat_jid: 'group@g.us',
+      sender: 'assistant@nanoclaw',
+      sender_name: 'Andy',
+      content: 'Andy: hi there',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      is_bot_message: true,
+    });
+    store({
+      id: 'c3',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: 'next question',
+      timestamp: '2024-01-01T00:00:03.000Z',
+    });
+
+    const window = getConversationWindow('group@g.us', 20, 6000);
+    expect(window).toEqual([
+      {
+        role: 'user',
+        content: 'hello',
+        timestamp: '2024-01-01T00:00:01.000Z',
+      },
+      {
+        role: 'assistant',
+        content: 'hi there',
+        timestamp: '2024-01-01T00:00:02.000Z',
+      },
+      {
+        role: 'user',
+        content: 'next question',
+        timestamp: '2024-01-01T00:00:03.000Z',
+      },
+    ]);
+  });
+
+  it('applies message and character caps', () => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 'm1',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: '11111',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+    store({
+      id: 'm2',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: '22222',
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+    store({
+      id: 'm3',
+      chat_jid: 'group@g.us',
+      sender: 'user@s.whatsapp.net',
+      sender_name: 'User',
+      content: '33333',
+      timestamp: '2024-01-01T00:00:03.000Z',
+    });
+
+    const byCount = getConversationWindow('group@g.us', 2, 100);
+    expect(byCount).toHaveLength(2);
+    expect(byCount[0].content).toBe('22222');
+    expect(byCount[1].content).toBe('33333');
+
+    const byChars = getConversationWindow('group@g.us', 20, 8);
+    expect(byChars).toHaveLength(1);
+    expect(byChars[0].content).toBe('33333');
   });
 });
 
