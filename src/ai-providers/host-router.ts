@@ -20,7 +20,10 @@ import {
   shouldRunCritics,
 } from '../critics/index.js';
 import { logger } from '../logger.js';
-import { ConversationWindowMessage, buildSystemPrompt } from '../openrouter-runtime.js';
+import {
+  ConversationWindowMessage,
+  buildSystemPrompt,
+} from '../openrouter-runtime.js';
 import { KimiProvider } from './kimi-provider.js';
 import { OpenAIProvider } from './openai-provider.js';
 import { OpenRouterProvider } from './openrouter-provider.js';

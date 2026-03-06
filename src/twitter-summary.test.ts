@@ -17,7 +17,10 @@ afterEach(() => {
 describe('getTwitterSummary', () => {
   it('returns guidance when summary file is missing', () => {
     const text = getTwitterSummary({
-      summaryFile: path.join(os.tmpdir(), 'nanoclaw-does-not-exist-summary.txt'),
+      summaryFile: path.join(
+        os.tmpdir(),
+        'nanoclaw-does-not-exist-summary.txt',
+      ),
     });
     expect(text).toContain('Twitter summary is not available yet.');
     expect(text).toContain('TWITTER_SUMMARY_FILE');

@@ -8,7 +8,10 @@ import {
   OPENROUTER_MODEL_GENERAL,
 } from './config.js';
 import { logger } from './logger.js';
-import { callOpenRouterChat, OpenRouterChatMessage } from './openrouter-debate.js';
+import {
+  callOpenRouterChat,
+  OpenRouterChatMessage,
+} from './openrouter-debate.js';
 
 export interface ConversationWindowMessage {
   role: 'user' | 'assistant';
@@ -53,7 +56,10 @@ export interface OpenRouterReplyResult {
   completionTokens: number;
 }
 
-function readMemoryFile(filePath: string | undefined, maxChars: number): string {
+function readMemoryFile(
+  filePath: string | undefined,
+  maxChars: number,
+): string {
   if (!filePath || !fs.existsSync(filePath)) return '';
   try {
     const text = fs.readFileSync(filePath, 'utf-8').trim();
@@ -118,7 +124,10 @@ function normalizeModelText(content: string): string {
 
 function toFailureKind(err: unknown): OpenRouterFailureKind {
   const message = err instanceof Error ? err.message : String(err);
-  if (err instanceof SyntaxError || /json|parse|unexpected token/i.test(message)) {
+  if (
+    err instanceof SyntaxError ||
+    /json|parse|unexpected token/i.test(message)
+  ) {
     return 'parse';
   }
   const statusMatch = message.match(/\((\d{3})\)/);

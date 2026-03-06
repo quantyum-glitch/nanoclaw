@@ -53,7 +53,10 @@ function parseInteger(value: string | undefined, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
-function parseList(value: string | undefined, defaultValue: string[]): string[] {
+function parseList(
+  value: string | undefined,
+  defaultValue: string[],
+): string[] {
   if (!value) return defaultValue;
   const parsed = value
     .split(',')
@@ -186,8 +189,7 @@ export const CRITICS_MAX_MODELS = Math.max(
   ),
 );
 export const OPENROUTER_CRITIC_MODELS = parseList(
-  process.env.OPENROUTER_CRITIC_MODELS ||
-    envConfig.OPENROUTER_CRITIC_MODELS,
+  process.env.OPENROUTER_CRITIC_MODELS || envConfig.OPENROUTER_CRITIC_MODELS,
   [],
 );
 

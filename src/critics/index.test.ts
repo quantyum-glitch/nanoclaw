@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  buildRefactorPrompt,
-  runCritics,
-  shouldRunCritics,
-} from './index.js';
+import { buildRefactorPrompt, runCritics, shouldRunCritics } from './index.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
