@@ -97,6 +97,13 @@ npm run bundle:export -- --out nanoclaw-setup.bundle --passphrase "your-passphra
 npm run bundle:import -- --in nanoclaw-setup.bundle --passphrase "your-passphrase"
 ```
 
+Gmail remote control CLI (send commands over email to another NanoClaw machine):
+```bash
+npm run gmail:ctl -- send "/ai-status" --to nanoclaw-bot@gmail.com
+npm run gmail:ctl -- send "/ai-use openrouter/openrouter-free" --to nanoclaw-bot@gmail.com
+npm run gmail:ctl -- ask "@Andy summarize today's inbox" --to nanoclaw-bot@gmail.com
+```
+
 ## Customizing
 
 NanoClaw doesn't use configuration files. To make changes, just tell Claude Code what you want:

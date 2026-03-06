@@ -15,6 +15,7 @@
     "prepare": "husky",
     "setup": "tsx setup/index.ts",
     "auth": "tsx src/whatsapp-auth.ts",
+    "gmail:ctl": "tsx src/tools/gmail-nanoclaw-cli.ts",
     "llm:debate": "tsx scripts/llm-debate.ts",
     "llm:list-free": "tsx scripts/list-openrouter-free-models.ts",
     "bundle:export": "tsx scripts/setup-bundle.ts export",
