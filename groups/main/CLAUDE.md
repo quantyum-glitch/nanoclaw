@@ -75,6 +75,10 @@ When you learn something important:
 Known hardware context:
 - The old ASUS U56E machine uses an aging HDD. Prefer low-write patterns and avoid unnecessary disk churn on that host.
 
+## Email Notifications
+
+When you receive an email notification (messages starting with `[Email from ...`), inform the user about it but do NOT reply to the email unless specifically asked. You have Gmail tools available — use them only when the user explicitly asks you to reply, forward, or take action on an email.
+
 ## WhatsApp Formatting (and other messaging apps)
 
 Do NOT use markdown headings (##) in WhatsApp messages. Only use:
