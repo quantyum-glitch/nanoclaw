@@ -8,6 +8,7 @@ vi.mock('../config.js', () => ({
   STORE_DIR: '/tmp/nanoclaw-test-store',
   ASSISTANT_NAME: 'Andy',
   ASSISTANT_HAS_OWN_NUMBER: false,
+  WHATSAPP_ENABLED: 'auto',
 }));
 
 // Mock logger
@@ -255,7 +256,7 @@ describe('WhatsAppChannel', () => {
   // --- QR code and auth ---
 
   describe('authentication', () => {
-    it('exits process when QR code is emitted (no auth state)', async () => {
+    it('does not exit process when QR code is emitted', async () => {
       vi.useFakeTimers();
       const mockExit = vi
         .spyOn(process, 'exit')
@@ -276,7 +277,7 @@ describe('WhatsAppChannel', () => {
       // Advance timer past the 1000ms setTimeout before exit
       await vi.advanceTimersByTimeAsync(1500);
 
-      expect(mockExit).toHaveBeenCalledWith(1);
+      expect(mockExit).not.toHaveBeenCalled();
       mockExit.mockRestore();
       vi.useRealTimers();
     });
@@ -300,7 +301,7 @@ describe('WhatsAppChannel', () => {
       // The channel should attempt to reconnect (calls connectInternal again)
     });
 
-    it('exits on loggedOut disconnect', async () => {
+    it('does not exit on loggedOut disconnect', async () => {
       const mockExit = vi
         .spyOn(process, 'exit')
         .mockImplementation(() => undefined as never);
@@ -314,7 +315,7 @@ describe('WhatsAppChannel', () => {
       triggerDisconnect(401);
 
       expect(channel.isConnected()).toBe(false);
-      expect(mockExit).toHaveBeenCalledWith(0);
+      expect(mockExit).not.toHaveBeenCalled();
       mockExit.mockRestore();
     });
 

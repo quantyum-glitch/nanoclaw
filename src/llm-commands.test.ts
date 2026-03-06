@@ -48,6 +48,32 @@ describe('parseLlmCommand', () => {
     });
   });
 
+  it('parses AI status and primary commands', () => {
+    expect(parseLlmCommand('/ai-status', trigger)).toEqual({
+      type: 'ai-status',
+    });
+    expect(parseLlmCommand('*ai-list', trigger)).toEqual({
+      type: 'ai-status',
+    });
+    expect(parseLlmCommand('/ai-primary', trigger)).toEqual({
+      type: 'ai-primary',
+    });
+  });
+
+  it('parses ai-use command with agent', () => {
+    expect(parseLlmCommand('/ai-use openrouter/openrouter-free', trigger)).toEqual({
+      type: 'ai-use',
+      agent: 'openrouter/openrouter-free',
+    });
+  });
+
+  it('parses enable-whatsapp command with phone', () => {
+    expect(parseLlmCommand('/enable-whatsapp 14155551234', trigger)).toEqual({
+      type: 'enable-whatsapp',
+      phone: '14155551234',
+    });
+  });
+
   it('parses twitter summary command variants', () => {
     expect(parseLlmCommand('/twitter-summary', trigger)).toEqual({
       type: 'twitter-summary',
