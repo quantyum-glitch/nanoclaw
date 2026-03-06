@@ -9,6 +9,20 @@ import { readEnvFile } from './env.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'HOST_AI_ENABLED',
+  'PRIMARY_AI',
+  'HOST_AI_VERBOSE',
+  'HOST_FALLBACK_CHAIN',
+  'KIMI_API_KEY',
+  'KIMI_MODEL',
+  'KIMI_BASE_URL',
+  'OPENAI_API_KEY',
+  'OPENAI_MODEL',
+  'OPENAI_BASE_URL',
+  'CRITICS_MODE',
+  'CRITICS_TIMEOUT_MS',
+  'CRITICS_MAX_MODELS',
+  'OPENROUTER_CRITIC_MODELS',
   'OPENROUTER_API_KEY',
   'OPENROUTER_BASE_URL',
   'OPENROUTER_MODEL_GENERAL',
@@ -39,13 +53,36 @@ function parseInteger(value: string | undefined, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+function parseList(value: string | undefined, defaultValue: string[]): string[] {
+  if (!value) return defaultValue;
+  const parsed = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return parsed.length > 0 ? parsed : defaultValue;
+}
+
+export type CriticsMode = 'off' | 'code-only' | 'paid' | 'always';
+
+function parseCriticsMode(value: string | undefined): CriticsMode {
+  const normalized = (value || '').trim().toLowerCase();
+  if (
+    normalized === 'off' ||
+    normalized === 'code-only' ||
+    normalized === 'paid' ||
+    normalized === 'always'
+  ) {
+    return normalized;
+  }
+  return 'off';
+}
+
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
-export const ASSISTANT_HAS_OWN_NUMBER =
-  parseBoolean(
-    process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER,
-    false,
-  );
+export const ASSISTANT_HAS_OWN_NUMBER = parseBoolean(
+  process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER,
+  false,
+);
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
@@ -96,6 +133,64 @@ export const OPENROUTER_HISTORY_MAX_CHARS = Math.max(
   ),
 );
 
+// Host AI router (feature-flagged, default off for compatibility)
+export const HOST_AI_ENABLED = parseBoolean(
+  process.env.HOST_AI_ENABLED || envConfig.HOST_AI_ENABLED,
+  false,
+);
+export const PRIMARY_AI =
+  process.env.PRIMARY_AI || envConfig.PRIMARY_AI || 'openrouter';
+export const HOST_AI_VERBOSE = parseBoolean(
+  process.env.HOST_AI_VERBOSE || envConfig.HOST_AI_VERBOSE,
+  false,
+);
+export const HOST_FALLBACK_CHAIN = parseList(
+  process.env.HOST_FALLBACK_CHAIN || envConfig.HOST_FALLBACK_CHAIN,
+  ['openrouter'],
+);
+
+export const KIMI_API_KEY =
+  process.env.KIMI_API_KEY || envConfig.KIMI_API_KEY || '';
+export const KIMI_MODEL =
+  process.env.KIMI_MODEL || envConfig.KIMI_MODEL || 'kimi-k2-0711-preview';
+export const KIMI_BASE_URL =
+  process.env.KIMI_BASE_URL ||
+  envConfig.KIMI_BASE_URL ||
+  'https://api.moonshot.ai/v1';
+
+export const OPENAI_API_KEY =
+  process.env.OPENAI_API_KEY || envConfig.OPENAI_API_KEY || '';
+export const OPENAI_MODEL =
+  process.env.OPENAI_MODEL || envConfig.OPENAI_MODEL || 'gpt-4o';
+export const OPENAI_BASE_URL =
+  process.env.OPENAI_BASE_URL ||
+  envConfig.OPENAI_BASE_URL ||
+  'https://api.openai.com/v1';
+
+// Critics configuration
+export const CRITICS_MODE = parseCriticsMode(
+  process.env.CRITICS_MODE || envConfig.CRITICS_MODE,
+);
+export const CRITICS_TIMEOUT_MS = Math.max(
+  5_000,
+  parseInteger(
+    process.env.CRITICS_TIMEOUT_MS || envConfig.CRITICS_TIMEOUT_MS,
+    25_000,
+  ),
+);
+export const CRITICS_MAX_MODELS = Math.max(
+  1,
+  parseInteger(
+    process.env.CRITICS_MAX_MODELS || envConfig.CRITICS_MAX_MODELS,
+    3,
+  ),
+);
+export const OPENROUTER_CRITIC_MODELS = parseList(
+  process.env.OPENROUTER_CRITIC_MODELS ||
+    envConfig.OPENROUTER_CRITIC_MODELS,
+  [],
+);
+
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
 const HOME_DIR = process.env.HOME || os.homedir();
@@ -105,7 +200,14 @@ const HOME_DIR = process.env.HOME || os.homedir();
 export const TWITTER_SUMMARY_FILE =
   process.env.TWITTER_SUMMARY_FILE ||
   envConfig.TWITTER_SUMMARY_FILE ||
-  path.join(HOME_DIR, 'Documents', 'nanoclaw', 'data', 'twitter-list', 'summary.txt');
+  path.join(
+    HOME_DIR,
+    'Documents',
+    'nanoclaw',
+    'data',
+    'twitter-list',
+    'summary.txt',
+  );
 export const TWITTER_SUMMARY_REFRESH_COMMAND =
   process.env.TWITTER_SUMMARY_REFRESH_COMMAND ||
   envConfig.TWITTER_SUMMARY_REFRESH_COMMAND ||

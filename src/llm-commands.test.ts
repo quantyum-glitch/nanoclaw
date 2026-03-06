@@ -37,6 +37,17 @@ describe('parseLlmCommand', () => {
     });
   });
 
+  it('parses agent command with prompt', () => {
+    expect(parseLlmCommand('/agent run deep investigation', trigger)).toEqual({
+      type: 'agent',
+      prompt: 'run deep investigation',
+    });
+    expect(parseLlmCommand('*agent check all logs', trigger)).toEqual({
+      type: 'agent',
+      prompt: 'check all logs',
+    });
+  });
+
   it('parses twitter summary command variants', () => {
     expect(parseLlmCommand('/twitter-summary', trigger)).toEqual({
       type: 'twitter-summary',

@@ -3,15 +3,15 @@ import path from 'path';
 
 import {
   ASSISTANT_NAME,
+  HOST_AI_ENABLED,
   IDLE_TIMEOUT,
   OPENROUTER_API_KEY,
-  OPENROUTER_COOLDOWN_MS,
-  OPENROUTER_FAILURE_THRESHOLD,
   OPENROUTER_HISTORY_MAX_CHARS,
   OPENROUTER_HISTORY_MAX_MESSAGES,
   POLL_INTERVAL,
   TRIGGER_PATTERN,
 } from './config.js';
+import { HostRouter } from './ai-providers/host-router.js';
 import './channels/index.js';
 import {
   getChannelFactory,
@@ -61,6 +61,16 @@ import {
   OpenRouterReplyError,
   runOpenRouterReply,
 } from './openrouter-runtime.js';
+import {
+  _getOpenRouterCircuitStateForTests as getOpenRouterCircuitStateForTests,
+  _isOpenRouterCircuitOpenForTests as isOpenRouterCircuitOpenForTests,
+  _registerOpenRouterFailureForTests as registerOpenRouterFailureForTests,
+  _resetOpenRouterCircuitForTests as resetOpenRouterCircuitForTests,
+  getOpenRouterCircuitState,
+  isOpenRouterCircuitOpen,
+  registerOpenRouterFailure,
+  resetOpenRouterFailures,
+} from './openrouter-circuit.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { getTwitterSummary, refreshTwitterSummary } from './twitter-summary.js';
@@ -78,49 +88,22 @@ let messageLoopRunning = false;
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
+const hostRouter = new HostRouter();
 let assistantMessageCounter = 0;
-let openRouterConsecutiveFailures = 0;
-let openRouterCircuitOpenUntil = 0;
-
-function isOpenRouterCircuitOpen(): boolean {
-  return Date.now() < openRouterCircuitOpenUntil;
-}
-
-function resetOpenRouterFailures(): void {
-  openRouterConsecutiveFailures = 0;
-  openRouterCircuitOpenUntil = 0;
-}
-
-function registerOpenRouterFailure(reason: string): void {
-  openRouterConsecutiveFailures += 1;
-  if (openRouterConsecutiveFailures >= OPENROUTER_FAILURE_THRESHOLD) {
-    openRouterCircuitOpenUntil = Date.now() + OPENROUTER_COOLDOWN_MS;
-    logger.warn(
-      {
-        reason,
-        openRouterConsecutiveFailures,
-        circuitOpenUntil: new Date(openRouterCircuitOpenUntil).toISOString(),
-      },
-      'OpenRouter circuit opened',
-    );
-  }
-}
 
 /** @internal - exported for testing */
 export function _resetOpenRouterCircuitForTests(): void {
-  openRouterConsecutiveFailures = 0;
-  openRouterCircuitOpenUntil = 0;
+  resetOpenRouterCircuitForTests();
 }
 
 /** @internal - exported for testing */
 export function _registerOpenRouterFailureForTests(reason = 'test'): void {
-  registerOpenRouterFailure(reason);
+  registerOpenRouterFailureForTests(reason);
 }
 
 /** @internal - exported for testing */
 export function _isOpenRouterCircuitOpenForTests(nowMs?: number): boolean {
-  if (typeof nowMs !== 'number') return isOpenRouterCircuitOpen();
-  return nowMs < openRouterCircuitOpenUntil;
+  return isOpenRouterCircuitOpenForTests(nowMs);
 }
 
 /** @internal - exported for testing */
@@ -128,10 +111,7 @@ export function _getOpenRouterCircuitStateForTests(): {
   failures: number;
   openUntil: number;
 } {
-  return {
-    failures: openRouterConsecutiveFailures,
-    openUntil: openRouterCircuitOpenUntil,
-  };
+  return getOpenRouterCircuitStateForTests();
 }
 
 function stripTrailingCodeCommandFromHistory(
@@ -296,10 +276,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const latestMessage = missedMessages[missedMessages.length - 1];
   const llmCommand = parseLlmCommand(latestMessage.content, TRIGGER_PATTERN);
   let codePromptOverride: string | undefined;
+  let forceContainer = false;
   if (llmCommand) {
     try {
       if (llmCommand.type === 'help') {
-        await sendAndStoreAssistantMessage(channel, chatJid, llmCommandHelpText());
+        await sendAndStoreAssistantMessage(
+          channel,
+          chatJid,
+          llmCommandHelpText(),
+        );
         return true;
       }
 
@@ -353,7 +338,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         return true;
       }
 
-      codePromptOverride = llmCommand.prompt;
+      if (llmCommand.type === 'agent') {
+        codePromptOverride = llmCommand.prompt;
+        forceContainer = true;
+      } else {
+        codePromptOverride = llmCommand.prompt;
+      }
     } catch (err) {
       logger.error({ chatJid, err }, 'LLM command failed');
       await sendAndStoreAssistantMessage(
@@ -375,45 +365,92 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     ? stripTrailingCodeCommandFromHistory(rawHistory)
     : rawHistory;
 
-  const useOpenRouter = OPENROUTER_API_KEY.length > 0;
-  const circuitOpen = isOpenRouterCircuitOpen();
-  if (useOpenRouter && !circuitOpen) {
+  if (HOST_AI_ENABLED && !forceContainer && !codePromptOverride) {
     try {
       const groupDir = resolveGroupFolderPath(group.folder);
-      const openRouterResult = await runOpenRouterReply({
+      const hostResult = await hostRouter.route({
+        prompt,
+        messages: history,
         groupName: group.name,
         channelName: channel.name,
-        history,
-        promptOverride: prompt,
-        forceCodeModel: Boolean(codePromptOverride),
         groupMemoryPath: path.join(groupDir, 'CLAUDE.md'),
-        globalMemoryPath: path.join(process.cwd(), 'groups', 'global', 'CLAUDE.md'),
+        globalMemoryPath: path.join(
+          process.cwd(),
+          'groups',
+          'global',
+          'CLAUDE.md',
+        ),
+        assistantName: ASSISTANT_NAME,
       });
-      await sendAndStoreAssistantMessage(channel, chatJid, openRouterResult.text);
-      resetOpenRouterFailures();
-      return true;
-    } catch (err) {
-      if (err instanceof OpenRouterReplyError && err.kind !== 'config') {
-        registerOpenRouterFailure(err.kind);
+      if (hostResult) {
+        await sendAndStoreAssistantMessage(channel, chatJid, hostResult.text);
+        return true;
       }
+      logger.info(
+        { chatJid },
+        'All host providers failed, falling through to container',
+      );
+    } catch (err) {
       logger.warn(
         {
           chatJid,
           err: err instanceof Error ? err.message : String(err),
-          openRouterConsecutiveFailures,
-          circuitOpenUntil:
-            openRouterCircuitOpenUntil > 0
-              ? new Date(openRouterCircuitOpenUntil).toISOString()
-              : null,
         },
-        'OpenRouter host-side reply failed, falling back to Claude container',
+        'Host router failed, falling through to container',
       );
     }
-  } else if (useOpenRouter && circuitOpen) {
-    logger.info(
-      { chatJid, openRouterCircuitOpenUntil },
-      'OpenRouter circuit is open, routing directly to Claude fallback',
-    );
+  } else if (!forceContainer) {
+    const useOpenRouter = OPENROUTER_API_KEY.length > 0;
+    const circuitOpen = isOpenRouterCircuitOpen();
+    if (useOpenRouter && !circuitOpen) {
+      try {
+        const groupDir = resolveGroupFolderPath(group.folder);
+        const openRouterResult = await runOpenRouterReply({
+          groupName: group.name,
+          channelName: channel.name,
+          history,
+          promptOverride: prompt,
+          forceCodeModel: Boolean(codePromptOverride),
+          groupMemoryPath: path.join(groupDir, 'CLAUDE.md'),
+          globalMemoryPath: path.join(
+            process.cwd(),
+            'groups',
+            'global',
+            'CLAUDE.md',
+          ),
+        });
+        await sendAndStoreAssistantMessage(
+          channel,
+          chatJid,
+          openRouterResult.text,
+        );
+        resetOpenRouterFailures();
+        return true;
+      } catch (err) {
+        if (err instanceof OpenRouterReplyError && err.kind !== 'config') {
+          registerOpenRouterFailure(err.kind);
+        }
+        const circuitState = getOpenRouterCircuitState();
+        logger.warn(
+          {
+            chatJid,
+            err: err instanceof Error ? err.message : String(err),
+            openRouterConsecutiveFailures: circuitState.failures,
+            circuitOpenUntil:
+              circuitState.openUntil > 0
+                ? new Date(circuitState.openUntil).toISOString()
+                : null,
+          },
+          'OpenRouter host-side reply failed, falling back to Claude container',
+        );
+      }
+    } else if (useOpenRouter && circuitOpen) {
+      const circuitState = getOpenRouterCircuitState();
+      logger.info(
+        { chatJid, openRouterCircuitOpenUntil: circuitState.openUntil },
+        'OpenRouter circuit is open, routing directly to Claude fallback',
+      );
+    }
   }
 
   logger.info(
@@ -440,35 +477,43 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let outputSentToUser = false;
   const fallbackPrompt = buildClaudeFallbackPrompt(history, prompt);
 
-  const output = await runAgent(group, fallbackPrompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        outputSentToUser = await sendAndStoreAssistantMessage(
-          channel,
-          chatJid,
-          text,
+  const output = await runAgent(
+    group,
+    fallbackPrompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
         );
+        if (text) {
+          outputSentToUser = await sendAndStoreAssistantMessage(
+            channel,
+            chatJid,
+            text,
+          );
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);

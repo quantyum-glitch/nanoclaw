@@ -3,6 +3,7 @@ export type LlmCommand =
   | { type: 'list-free-models' }
   | { type: 'debate'; prompt: string }
   | { type: 'code'; prompt: string }
+  | { type: 'agent'; prompt: string }
   | { type: 'twitter-summary' }
   | { type: 'twitter-refresh' };
 
@@ -67,6 +68,11 @@ export function parseLlmCommand(
     return { type: 'code', prompt: rest };
   }
 
+  if (command === 'agent') {
+    if (!rest) return { type: 'help' };
+    return { type: 'agent', prompt: rest };
+  }
+
   if (
     command === 'twitter-summary' ||
     command === 'top-tweets' ||
@@ -95,6 +101,7 @@ export function llmCommandHelpText(): string {
     '- /free-models (or *free-models): list current free OpenRouter models',
     '- /debate <prompt> (or *debate <prompt>): run multi-model critique/fight and return synthesis',
     '- /code <prompt> (or *code <prompt>): run with the strong coding model',
+    '- /agent <prompt> (or *agent <prompt>): bypass host router and run in container',
     '- /twitter-summary (or *top-tweets): show cached Twitter/X list summary',
     '- /twitter-now (or *twitter-refresh): refresh Twitter summary then show it',
     '- /llm-help: show this help',
