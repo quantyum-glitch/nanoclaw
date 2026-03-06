@@ -16,6 +16,7 @@ import {
   ASSISTANT_HAS_OWN_NUMBER,
   ASSISTANT_NAME,
   STORE_DIR,
+  WHATSAPP_ENABLED,
 } from '../config.js';
 import { getLastGroupSync, setLastGroupSync, updateChatName } from '../db.js';
 import { logger } from '../logger.js';
@@ -44,6 +45,7 @@ export class WhatsAppChannel implements Channel {
   private outgoingQueue: Array<{ jid: string; text: string }> = [];
   private flushing = false;
   private groupSyncTimerStarted = false;
+  private needsAuth = false;
 
   private opts: WhatsAppChannelOpts;
 
@@ -52,12 +54,15 @@ export class WhatsAppChannel implements Channel {
   }
 
   async connect(): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      this.connectInternal(resolve).catch(reject);
+    return new Promise<void>((resolve) => {
+      this.connectInternal(resolve).catch((err) => {
+        logger.error({ err }, 'WhatsApp connect failed');
+        resolve();
+      });
     });
   }
 
-  private async connectInternal(onFirstOpen?: () => void): Promise<void> {
+  private async connectInternal(onConnectReady?: () => void): Promise<void> {
     const authDir = path.join(STORE_DIR, 'auth');
     fs.mkdirSync(authDir, { recursive: true });
 
@@ -85,13 +90,19 @@ export class WhatsAppChannel implements Channel {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
+        this.needsAuth = true;
         const msg =
           'WhatsApp authentication required. Run /setup in Claude Code.';
         logger.error(msg);
-        exec(
-          `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
-        );
-        setTimeout(() => process.exit(1), 1000);
+        if (process.platform === 'darwin') {
+          exec(
+            `osascript -e 'display notification "${msg}" with title "NanoClaw" sound name "Basso"'`,
+          );
+        }
+        if (onConnectReady) {
+          onConnectReady();
+          onConnectReady = undefined;
+        }
       }
 
       if (connection === 'close') {
@@ -109,6 +120,15 @@ export class WhatsAppChannel implements Channel {
           'Connection closed',
         );
 
+        if (this.needsAuth) {
+          logger.info('Waiting for WhatsApp auth before reconnecting');
+          if (onConnectReady) {
+            onConnectReady();
+            onConnectReady = undefined;
+          }
+          return;
+        }
+
         if (shouldReconnect) {
           logger.info('Reconnecting...');
           this.connectInternal().catch((err) => {
@@ -120,10 +140,15 @@ export class WhatsAppChannel implements Channel {
             }, 5000);
           });
         } else {
+          this.needsAuth = true;
           logger.info('Logged out. Run /setup to re-authenticate.');
-          process.exit(0);
+          if (onConnectReady) {
+            onConnectReady();
+            onConnectReady = undefined;
+          }
         }
       } else if (connection === 'open') {
+        this.needsAuth = false;
         this.connected = true;
         logger.info('Connected to WhatsApp');
 
@@ -162,9 +187,9 @@ export class WhatsAppChannel implements Channel {
         }
 
         // Signal first connection to caller
-        if (onFirstOpen) {
-          onFirstOpen();
-          onFirstOpen = undefined;
+        if (onConnectReady) {
+          onConnectReady();
+          onConnectReady = undefined;
         }
       }
     });
@@ -388,4 +413,18 @@ export class WhatsAppChannel implements Channel {
   }
 }
 
-registerChannel('whatsapp', (opts: ChannelOpts) => new WhatsAppChannel(opts));
+function hasWhatsAppCredentials(): boolean {
+  return fs.existsSync(path.join(STORE_DIR, 'auth', 'creds.json'));
+}
+
+registerChannel('whatsapp', (opts: ChannelOpts) => {
+  if (WHATSAPP_ENABLED === 'false') {
+    logger.info('WhatsApp disabled via WHATSAPP_ENABLED=false');
+    return null;
+  }
+  if (WHATSAPP_ENABLED === 'auto' && !hasWhatsAppCredentials()) {
+    logger.warn('WhatsApp: credentials missing in store/auth/creds.json');
+    return null;
+  }
+  return new WhatsAppChannel(opts);
+});

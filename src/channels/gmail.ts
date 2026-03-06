@@ -161,6 +161,44 @@ export class GmailChannel implements Channel {
     }
   }
 
+  getAuthenticatedEmailAddress(): string {
+    return this.userEmail;
+  }
+
+  async sendNewEmail(to: string, subject: string, text: string): Promise<boolean> {
+    if (!this.gmail) {
+      logger.warn('Gmail not initialized');
+      return false;
+    }
+    const headers = [
+      `To: ${to}`,
+      `From: ${this.userEmail}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      text,
+    ].join('\r\n');
+    const encodedMessage = Buffer.from(headers)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    try {
+      await this.gmail.users.messages.send({
+        userId: 'me',
+        requestBody: {
+          raw: encodedMessage,
+        },
+      });
+      logger.info({ to, subject }, 'Gmail outbound email sent');
+      return true;
+    } catch (err) {
+      logger.warn({ to, subject, err }, 'Failed to send Gmail outbound email');
+      return false;
+    }
+  }
+
   isConnected(): boolean {
     return this.gmail !== null;
   }

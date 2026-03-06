@@ -4,6 +4,10 @@ export type LlmCommand =
   | { type: 'debate'; prompt: string }
   | { type: 'code'; prompt: string }
   | { type: 'agent'; prompt: string }
+  | { type: 'ai-status' }
+  | { type: 'ai-primary' }
+  | { type: 'ai-use'; agent: string }
+  | { type: 'enable-whatsapp'; phone: string }
   | { type: 'twitter-summary' }
   | { type: 'twitter-refresh' };
 
@@ -73,6 +77,24 @@ export function parseLlmCommand(
     return { type: 'agent', prompt: rest };
   }
 
+  if (command === 'ai-status' || command === 'ai-list') {
+    return { type: 'ai-status' };
+  }
+
+  if (command === 'ai-primary') {
+    return { type: 'ai-primary' };
+  }
+
+  if (command === 'ai-use') {
+    if (!rest) return { type: 'help' };
+    return { type: 'ai-use', agent: rest };
+  }
+
+  if (command === 'enable-whatsapp') {
+    if (!rest) return { type: 'help' };
+    return { type: 'enable-whatsapp', phone: rest };
+  }
+
   if (
     command === 'twitter-summary' ||
     command === 'top-tweets' ||
@@ -102,6 +124,10 @@ export function llmCommandHelpText(): string {
     '- /debate <prompt> (or *debate <prompt>): run multi-model critique/fight and return synthesis',
     '- /code <prompt> (or *code <prompt>): run with the strong coding model',
     '- /agent <prompt> (or *agent <prompt>): bypass host router and run in container',
+    '- /ai-status (or *ai-list): show configured AI agents and current default',
+    '- /ai-primary: show the current default AI agent',
+    '- /ai-use <agent>: set default agent (claude|openrouter/<model>|kimi/<model>|openai/<model>|auto)',
+    '- /enable-whatsapp <phone>: start pairing-code setup and hot-enable WhatsApp',
     '- /twitter-summary (or *top-tweets): show cached Twitter/X list summary',
     '- /twitter-now (or *twitter-refresh): refresh Twitter summary then show it',
     '- /llm-help: show this help',

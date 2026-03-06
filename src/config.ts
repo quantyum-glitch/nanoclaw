@@ -9,6 +9,8 @@ import { readEnvFile } from './env.js';
 const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
+  'WHATSAPP_ENABLED',
+  'GMAIL_NOTIFY_TO',
   'HOST_AI_ENABLED',
   'PRIMARY_AI',
   'HOST_AI_VERBOSE',
@@ -86,6 +88,24 @@ export const ASSISTANT_HAS_OWN_NUMBER = parseBoolean(
   process.env.ASSISTANT_HAS_OWN_NUMBER || envConfig.ASSISTANT_HAS_OWN_NUMBER,
   false,
 );
+export type WhatsAppEnabledMode = 'true' | 'false' | 'auto';
+
+function parseWhatsAppEnabled(value: string | undefined): WhatsAppEnabledMode {
+  const normalized = (value || 'auto').trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1' || normalized === 'yes') {
+    return 'true';
+  }
+  if (normalized === 'false' || normalized === '0' || normalized === 'no') {
+    return 'false';
+  }
+  return 'auto';
+}
+
+export const WHATSAPP_ENABLED = parseWhatsAppEnabled(
+  process.env.WHATSAPP_ENABLED || envConfig.WHATSAPP_ENABLED,
+);
+export const GMAIL_NOTIFY_TO =
+  process.env.GMAIL_NOTIFY_TO || envConfig.GMAIL_NOTIFY_TO || '';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
