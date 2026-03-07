@@ -131,7 +131,8 @@ async function authenticate(): Promise<AuthContext> {
   const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
   const profile = await gmail.users.getProfile({ userId: 'me' });
   const userEmail = profile.data.emailAddress || '';
-  if (!userEmail) throw new Error('Unable to resolve authenticated Gmail address');
+  if (!userEmail)
+    throw new Error('Unable to resolve authenticated Gmail address');
   return { gmail, userEmail };
 }
 
@@ -186,7 +187,9 @@ function extractEmailAddress(fromHeader: string): string {
   return (m?.[1] || fromHeader).trim().toLowerCase();
 }
 
-function extractTextBody(payload: gmail_v1.Schema$MessagePart | undefined): string {
+function extractTextBody(
+  payload: gmail_v1.Schema$MessagePart | undefined,
+): string {
   if (!payload) return '';
 
   if (payload.mimeType === 'text/plain' && payload.body?.data) {
@@ -232,7 +235,9 @@ async function waitForReply(
 
     const messages = (thread.data.messages || [])
       .slice()
-      .sort((a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0));
+      .sort(
+        (a, b) => Number(a.internalDate || 0) - Number(b.internalDate || 0),
+      );
 
     for (const message of messages) {
       const timestamp = Number(message.internalDate || 0);

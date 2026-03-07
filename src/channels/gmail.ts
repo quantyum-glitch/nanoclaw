@@ -165,7 +165,11 @@ export class GmailChannel implements Channel {
     return this.userEmail;
   }
 
-  async sendNewEmail(to: string, subject: string, text: string): Promise<boolean> {
+  async sendNewEmail(
+    to: string,
+    subject: string,
+    text: string,
+  ): Promise<boolean> {
     if (!this.gmail) {
       logger.warn('Gmail not initialized');
       return false;

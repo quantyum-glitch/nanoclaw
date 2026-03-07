@@ -112,7 +112,11 @@ let runtimeChannelOpts: ChannelOpts | null = null;
 let whatsappSetupInFlight = false;
 
 const DEFAULT_AI_AGENT_KEY = 'default_ai_agent';
-const WHATSAPP_STATUS_FILE = path.join(process.cwd(), 'store', 'auth-status.txt');
+const WHATSAPP_STATUS_FILE = path.join(
+  process.cwd(),
+  'store',
+  'auth-status.txt',
+);
 const WHATSAPP_SETUP_TIMEOUT_MS = 180_000;
 
 interface GmailOutboundChannel extends Channel {
@@ -201,7 +205,9 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function isGmailOutboundChannel(channel: Channel): channel is GmailOutboundChannel {
+function isGmailOutboundChannel(
+  channel: Channel,
+): channel is GmailOutboundChannel {
   return (
     channel.name === 'gmail' &&
     typeof (channel as GmailOutboundChannel).sendNewEmail === 'function' &&
@@ -240,7 +246,9 @@ function getAiAgentOptions(): AiAgentOption[] {
       id: `kimi/${KIMI_MODEL}`,
       available: KIMI_API_KEY.length > 0,
       reason:
-        KIMI_API_KEY.length > 0 ? 'KIMI_API_KEY configured' : 'KIMI_API_KEY missing',
+        KIMI_API_KEY.length > 0
+          ? 'KIMI_API_KEY configured'
+          : 'KIMI_API_KEY missing',
     },
     {
       id: `openai/${OPENAI_MODEL}`,
@@ -274,7 +282,8 @@ function normalizeAiAgentChoice(raw: string): string | null {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) return null;
   if (normalized === 'auto' || normalized === 'claude') return normalized;
-  if (normalized === 'openrouter') return `openrouter/${OPENROUTER_MODEL_GENERAL}`;
+  if (normalized === 'openrouter')
+    return `openrouter/${OPENROUTER_MODEL_GENERAL}`;
   if (normalized === 'kimi') return `kimi/${KIMI_MODEL}`;
   if (normalized === 'openai') return `openai/${OPENAI_MODEL}`;
   if (
@@ -289,13 +298,21 @@ function normalizeAiAgentChoice(raw: string): string | null {
 
 function isAiAgentAvailable(agent: string): boolean {
   if (agent === 'auto') return true;
-  return getAiAgentOptions().some((option) => option.id === agent && option.available);
+  return getAiAgentOptions().some(
+    (option) => option.id === agent && option.available,
+  );
 }
 
-function getPreferredHostProvider(agent: string): 'openrouter' | 'kimi' | 'openai' | null {
+function getPreferredHostProvider(
+  agent: string,
+): 'openrouter' | 'kimi' | 'openai' | null {
   if (!agent.includes('/')) return null;
   const provider = agent.split('/')[0];
-  if (provider === 'openrouter' || provider === 'kimi' || provider === 'openai') {
+  if (
+    provider === 'openrouter' ||
+    provider === 'kimi' ||
+    provider === 'openai'
+  ) {
     return provider;
   }
   return null;
@@ -330,7 +347,11 @@ async function waitForWhatsAppStatus(
   while (Date.now() - startedAt < timeoutMs) {
     const status = readWhatsAppStatus();
     if (status && predicate(status)) return status;
-    if (proc.exitCode !== null && proc.exitCode !== 0 && status.startsWith('failed:')) {
+    if (
+      proc.exitCode !== null &&
+      proc.exitCode !== 0 &&
+      status.startsWith('failed:')
+    ) {
       return status;
     }
     await sleep(1000);
@@ -342,17 +363,24 @@ async function connectChannelAtRuntime(
   channelName: string,
   opts?: { forceEnable?: boolean },
 ): Promise<Channel | null> {
-  const existing = channels.find((channel) => channel.name === channelName && channel.isConnected());
+  const existing = channels.find(
+    (channel) => channel.name === channelName && channel.isConnected(),
+  );
   if (existing) return existing;
   if (!runtimeChannelOpts) {
-    logger.error({ channelName }, 'Runtime channel options are not initialized');
+    logger.error(
+      { channelName },
+      'Runtime channel options are not initialized',
+    );
     return null;
   }
 
   let channel: Channel | null = null;
   if (channelName === 'whatsapp' && opts?.forceEnable) {
     const mod = await import('./channels/whatsapp.js');
-    channel = new mod.WhatsAppChannel(runtimeChannelOpts as import('./channels/whatsapp.js').WhatsAppChannelOpts);
+    channel = new mod.WhatsAppChannel(
+      runtimeChannelOpts as import('./channels/whatsapp.js').WhatsAppChannelOpts,
+    );
   } else {
     const factory = getChannelFactory(channelName);
     if (!factory) return null;
@@ -369,7 +397,10 @@ async function connectChannelAtRuntime(
   }
 
   if (!channel.isConnected()) {
-    logger.warn({ channelName }, 'Runtime channel did not reach connected state');
+    logger.warn(
+      { channelName },
+      'Runtime channel did not reach connected state',
+    );
     return null;
   }
 
@@ -519,7 +550,8 @@ async function sendStartupHelloEmail(): Promise<void> {
 
   const startedAt = new Date().toISOString();
   const host = os.hostname();
-  const connectedNames = channels.map((channel) => channel.name).join(', ') || 'none';
+  const connectedNames =
+    channels.map((channel) => channel.name).join(', ') || 'none';
   const aiOptions = getAiAgentOptions()
     .map((option) => `${option.available ? 'âœ…' : 'âŒ'} ${option.id}`)
     .join('\n');
@@ -710,7 +742,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
 
       if (llmCommand.type === 'ai-status') {
-        await sendAndStoreAssistantMessage(channel, chatJid, formatAiStatusMessage());
+        await sendAndStoreAssistantMessage(
+          channel,
+          chatJid,
+          formatAiStatusMessage(),
+        );
         return true;
       }
 
@@ -818,7 +854,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       if (containerAvailable) {
         forceContainer = true;
       } else {
-        logger.warn({ chatJid }, 'Preferred agent is claude but container is unavailable');
+        logger.warn(
+          { chatJid },
+          'Preferred agent is claude but container is unavailable',
+        );
       }
     } else {
       const preferredProvider = getPreferredHostProvider(preferredAgent);
@@ -844,7 +883,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
             assistantName: ASSISTANT_NAME,
           });
           if (preferredResult) {
-            await sendAndStoreAssistantMessage(channel, chatJid, preferredResult.text);
+            await sendAndStoreAssistantMessage(
+              channel,
+              chatJid,
+              preferredResult.text,
+            );
             return true;
           }
         } catch (err) {
@@ -1347,7 +1390,10 @@ async function main(): Promise<void> {
       channels.push(channel);
     } catch (err) {
       logger.warn(
-        { channel: channelName, err: err instanceof Error ? err.message : String(err) },
+        {
+          channel: channelName,
+          err: err instanceof Error ? err.message : String(err),
+        },
         'Channel connect failed â€” continuing with other channels',
       );
     }

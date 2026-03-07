@@ -61,7 +61,9 @@ describe('parseLlmCommand', () => {
   });
 
   it('parses ai-use command with agent', () => {
-    expect(parseLlmCommand('/ai-use openrouter/openrouter-free', trigger)).toEqual({
+    expect(
+      parseLlmCommand('/ai-use openrouter/openrouter-free', trigger),
+    ).toEqual({
       type: 'ai-use',
       agent: 'openrouter/openrouter-free',
     });
