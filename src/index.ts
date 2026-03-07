@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+﻿import { spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -17,6 +17,7 @@ import {
   OPENROUTER_HISTORY_MAX_CHARS,
   OPENROUTER_HISTORY_MAX_MESSAGES,
   POLL_INTERVAL,
+  TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
 import { HostRouter } from './ai-providers/host-router.js';
@@ -45,6 +46,7 @@ import {
   getDatabaseEngine,
   getMessagesSince,
   getNewMessages,
+  getRegisteredGroup,
   getRouterState,
   initDatabase,
   setRegisteredGroup,
@@ -81,6 +83,12 @@ import {
   resetOpenRouterFailures,
 } from './openrouter-circuit.js';
 import { findChannel, formatMessages, formatOutbound } from './router.js';
+import {
+  isSenderAllowed,
+  isTriggerAllowed,
+  loadSenderAllowlist,
+  shouldDropMessage,
+} from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { getTwitterSummary, refreshTwitterSummary } from './twitter-summary.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
@@ -249,12 +257,12 @@ function formatAiStatusMessage(): string {
   const defaultAgent = getDefaultAiAgentPreference();
   const lines = ['*AI Agent Status*', ''];
   for (const option of getAiAgentOptions()) {
-    const marker = option.available ? '✅' : '❌';
+    const marker = option.available ? 'âœ…' : 'âŒ';
     const suffix = option.id === defaultAgent ? ' [default]' : '';
-    lines.push(`${marker} ${option.id}${suffix} — ${option.reason}`);
+    lines.push(`${marker} ${option.id}${suffix} â€” ${option.reason}`);
   }
   if (defaultAgent === 'auto') {
-    lines.push('ℹ️ auto — use built-in routing defaults');
+    lines.push('â„¹ï¸ auto â€” use built-in routing defaults');
   }
   lines.push('');
   lines.push('Use /ai-use <agent> to switch default.');
@@ -434,7 +442,7 @@ async function startWhatsAppPairingSetup(
       await sendAndStoreAssistantMessage(
         requestChannel,
         chatJid,
-        `Pairing code: ${code}\nOpen WhatsApp → Linked Devices → Link with phone number and enter this code.`,
+        `Pairing code: ${code}\nOpen WhatsApp â†’ Linked Devices â†’ Link with phone number and enter this code.`,
       );
     } else {
       await sendAndStoreAssistantMessage(
@@ -513,11 +521,11 @@ async function sendStartupHelloEmail(): Promise<void> {
   const host = os.hostname();
   const connectedNames = channels.map((channel) => channel.name).join(', ') || 'none';
   const aiOptions = getAiAgentOptions()
-    .map((option) => `${option.available ? '✅' : '❌'} ${option.id}`)
+    .map((option) => `${option.available ? 'âœ…' : 'âŒ'} ${option.id}`)
     .join('\n');
   const defaultAgent = getDefaultAiAgentPreference();
 
-  const subject = 'NanoClaw is Online ✓';
+  const subject = 'NanoClaw is Online âœ“';
   const body = [
     `NanoClaw started successfully on ${host} at ${startedAt}.`,
     '',
@@ -640,14 +648,17 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   // For non-main groups, check if trigger is required and present
   if (!isMainGroup && group.requiresTrigger !== false) {
-    const hasTrigger = missedMessages.some((m) =>
-      TRIGGER_PATTERN.test(m.content.trim()),
+    const allowlistCfg = loadSenderAllowlist();
+    const hasTrigger = missedMessages.some(
+      (m) =>
+        TRIGGER_PATTERN.test(m.content.trim()) &&
+        (m.is_from_me || isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
     );
     if (!hasTrigger) return true;
   }
 
   // Advance cursor so messages are marked handled before command/container work.
-  // Rollback is only needed for combined OpenRouter+container failures.
+  // Save old cursor so we can roll back if processing fails before any output.
   const previousCursor = lastAgentTimestamp[chatJid] || '';
   lastAgentTimestamp[chatJid] =
     missedMessages[missedMessages.length - 1].timestamp;
@@ -791,7 +802,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     }
   }
 
-  const prompt = codePromptOverride || formatMessages(missedMessages);
+  const prompt = codePromptOverride || formatMessages(missedMessages, TIMEZONE);
   const rawHistory = getConversationWindow(
     chatJid,
     OPENROUTER_HISTORY_MAX_MESSAGES,
@@ -978,13 +989,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     fallbackPrompt,
     chatJid,
     async (result) => {
-      // Streaming output callback — called for each agent result
+      // Streaming output callback â€” called for each agent result
       if (result.result) {
         const raw =
           typeof result.result === 'string'
             ? result.result
             : JSON.stringify(result.result);
-        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        // Strip <internal>...</internal> blocks â€” agent uses these for internal reasoning
         const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
         logger.info(
           { group: group.name },
@@ -1015,7 +1026,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   if (idleTimer) clearTimeout(idleTimer);
 
   if (output === 'error' || hadError) {
-    // If we already sent output to the user, don't roll back the cursor —
+    // If we already sent output to the user, don't roll back the cursor â€”
     // the user got their response and re-processing would send duplicates.
     if (outputSentToUser) {
       logger.warn(
@@ -1180,8 +1191,12 @@ async function startMessageLoop(): Promise<void> {
           // Non-trigger messages accumulate in DB and get pulled as
           // context when a trigger eventually arrives.
           if (needsTrigger) {
-            const hasTrigger = groupMessages.some((m) =>
-              TRIGGER_PATTERN.test(m.content.trim()),
+            const allowlistCfg = loadSenderAllowlist();
+            const hasTrigger = groupMessages.some(
+              (m) =>
+                TRIGGER_PATTERN.test(m.content.trim()) &&
+                (m.is_from_me ||
+                  isTriggerAllowed(chatJid, m.sender, allowlistCfg)),
             );
             if (!hasTrigger) continue;
           }
@@ -1277,7 +1292,25 @@ async function main(): Promise<void> {
 
   // Channel callbacks (shared by all channels)
   const channelOpts: ChannelOpts = {
-    onMessage: (_chatJid: string, msg: NewMessage) => storeMessage(msg),
+    onMessage: (chatJid: string, msg: NewMessage) => {
+      // Sender allowlist drop mode: discard messages from denied senders before storing
+      if (!msg.is_from_me && !msg.is_bot_message && registeredGroups[chatJid]) {
+        const cfg = loadSenderAllowlist();
+        if (
+          shouldDropMessage(chatJid, cfg) &&
+          !isSenderAllowed(chatJid, msg.sender, cfg)
+        ) {
+          if (cfg.logDenied) {
+            logger.debug(
+              { chatJid, sender: msg.sender },
+              'sender-allowlist: dropping message (drop mode)',
+            );
+          }
+          return;
+        }
+      }
+      storeMessage(msg);
+    },
     onChatMetadata: (
       chatJid: string,
       timestamp: string,
@@ -1298,7 +1331,7 @@ async function main(): Promise<void> {
     if (!channel) {
       logger.warn(
         { channel: channelName },
-        'Channel installed but credentials missing — skipping. Check .env or re-run the channel skill.',
+        'Channel installed but credentials missing â€” skipping. Check .env or re-run the channel skill.',
       );
       continue;
     }
@@ -1307,7 +1340,7 @@ async function main(): Promise<void> {
       if (!channel.isConnected()) {
         logger.warn(
           { channel: channelName },
-          'Channel did not reach connected state — skipping',
+          'Channel did not reach connected state â€” skipping',
         );
         continue;
       }
@@ -1315,7 +1348,7 @@ async function main(): Promise<void> {
     } catch (err) {
       logger.warn(
         { channel: channelName, err: err instanceof Error ? err.message : String(err) },
-        'Channel connect failed — continuing with other channels',
+        'Channel connect failed â€” continuing with other channels',
       );
     }
   }
