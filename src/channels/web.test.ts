@@ -115,7 +115,8 @@ describe('WebChannel', () => {
 
   afterEach(async () => {
     if (redisState.client?.isOpen) await redisState.client.disconnect();
-    if (redisState.streamClient?.isOpen) await redisState.streamClient.disconnect();
+    if (redisState.streamClient?.isOpen)
+      await redisState.streamClient.disconnect();
   });
 
   describe('factory', () => {
@@ -214,7 +215,9 @@ describe('WebChannel', () => {
     await waitForMicrotasks();
     await waitForMicrotasks();
 
-    expect((opts.onMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+    expect((opts.onMessage as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+      1,
+    );
     await channel.disconnect();
   });
 

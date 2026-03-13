@@ -1,9 +1,6 @@
 import { createClient, RedisClientType } from 'redis';
 
-import {
-  WEB_CHANNEL_ENABLED,
-  WEB_CHANNEL_REDIS_URL,
-} from '../config.js';
+import { WEB_CHANNEL_ENABLED, WEB_CHANNEL_REDIS_URL } from '../config.js';
 import { logger } from '../logger.js';
 import { Channel } from '../types.js';
 import { ChannelOpts, registerChannel } from './registry.js';
@@ -88,7 +85,10 @@ export class WebChannel implements Channel {
 
         // v1 scope: only web:main is supported for deterministic trust setup.
         if (sessionId !== 'main') {
-          logger.warn({ sessionId }, 'Web channel dropping unsupported session');
+          logger.warn(
+            { sessionId },
+            'Web channel dropping unsupported session',
+          );
           continue;
         }
 
@@ -138,7 +138,9 @@ export class WebChannel implements Channel {
       text,
       timestamp: Date.now().toString(),
     });
-    await this.streamClient.xTrim(streamKey, 'MAXLEN', 1000, { strategyModifier: '~' });
+    await this.streamClient.xTrim(streamKey, 'MAXLEN', 1000, {
+      strategyModifier: '~',
+    });
   }
 
   async setTyping(_jid: string, isTyping: boolean): Promise<void> {
