@@ -11,3 +11,5 @@
 
 // whatsapp
 import './web.js';
+
+import './gmail.js';
