@@ -10,3 +10,4 @@
 // telegram
 
 // whatsapp
+import './web.js';

@@ -11,6 +11,9 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'WHATSAPP_ENABLED',
   'GMAIL_NOTIFY_TO',
+  'WEB_CHANNEL_ENABLED',
+  'WEB_CHANNEL_REDIS_URL',
+  'WEB_CHANNEL_SECRET',
   'HOST_AI_ENABLED',
   'PRIMARY_AI',
   'HOST_AI_VERBOSE',
@@ -106,6 +109,12 @@ export const WHATSAPP_ENABLED = parseWhatsAppEnabled(
 );
 export const GMAIL_NOTIFY_TO =
   process.env.GMAIL_NOTIFY_TO || envConfig.GMAIL_NOTIFY_TO || '';
+export const WEB_CHANNEL_ENABLED = parseBoolean(
+  process.env.WEB_CHANNEL_ENABLED || envConfig.WEB_CHANNEL_ENABLED,
+  false,
+);
+export const WEB_CHANNEL_REDIS_URL =
+  process.env.WEB_CHANNEL_REDIS_URL || envConfig.WEB_CHANNEL_REDIS_URL || '';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
 
