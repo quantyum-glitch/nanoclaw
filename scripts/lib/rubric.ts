@@ -15,6 +15,15 @@ export interface CriticParseResult {
   error?: string;
 }
 
+export interface CriticNarrativeSections {
+  agreements: string[];
+  disagreements: string[];
+  holes: string[];
+  styleOnly: string[];
+  mvp: string[];
+  pareto: string[];
+}
+
 export interface StructuralCheck {
   hasSummary: boolean;
   hasArchitectureOrApproach: boolean;
@@ -194,4 +203,38 @@ export function dedupeBlockers(blockers: Blocker[]): Blocker[] {
     if (!byKey.has(key)) byKey.set(key, blocker);
   }
   return [...byKey.values()];
+}
+
+function collectNarrativeItems(lines: string[]): string[] {
+  return lines
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^[-*]\s+/, '').trim())
+    .filter(Boolean);
+}
+
+function getSectionSlice(lines: string[], heading: string): string[] {
+  const headingRe = new RegExp(`^\\s*${heading}\\s*:`, 'i');
+  const start = lines.findIndex((line) => headingRe.test(line));
+  if (start < 0) return [];
+
+  const out: string[] = [];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (/^\s*[A-Z_ ]+\s*:/.test(line)) break;
+    out.push(line);
+  }
+  return collectNarrativeItems(out);
+}
+
+export function parseCriticNarrative(raw: string): CriticNarrativeSections {
+  const lines = raw.split(/\r?\n/);
+  return {
+    agreements: getSectionSlice(lines, 'AGREEMENTS'),
+    disagreements: getSectionSlice(lines, 'DISAGREEMENTS'),
+    holes: getSectionSlice(lines, 'HOLES'),
+    styleOnly: getSectionSlice(lines, 'STYLE_ONLY'),
+    mvp: getSectionSlice(lines, 'MVP'),
+    pareto: getSectionSlice(lines, 'PARETO'),
+  };
 }

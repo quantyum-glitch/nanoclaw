@@ -9,6 +9,7 @@ export interface ProviderCallOptions {
   maxOutputTokens: number;
   timeoutMs: number;
   temperature?: number;
+  modelOverride?: string;
 }
 
 export interface ProviderResult {
@@ -344,7 +345,7 @@ export async function callGemini(
   const apiKey = getEnv('GEMINI_API_KEY');
 
   if (apiKey) {
-    const model = getEnv('GEMINI_MODEL') || 'gemini-2.0-flash';
+    const model = options.modelOverride || getEnv('GEMINI_MODEL') || 'gemini-2.0-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
 
     try {
@@ -395,7 +396,7 @@ export async function callKimi(
   options: ProviderCallOptions,
 ): Promise<ProviderResult> {
   const apiKey = getEnv('KIMI_API_KEY');
-  const model = getEnv('KIMI_MODEL') || 'moonshot-v1-8k';
+  const model = options.modelOverride || getEnv('KIMI_MODEL') || 'moonshot-v1-8k';
   const useCli = isTrue(getEnv('KIMI_USE_CLI'));
   const configuredEndpoint = getEnv('KIMI_BASE_URL');
   const endpoints = configuredEndpoint
@@ -517,8 +518,15 @@ export async function callAnthropic(
 
 export function getDefaultModels() {
   return {
-    freeDrafter: getEnv('OPENROUTER_FREE_DRAFTER_MODEL') || 'openrouter/free',
-    freeCritic: getEnv('OPENROUTER_FREE_CRITIC_MODEL') || 'openrouter/free',
+    freeDrafter:
+      getEnv('OPENROUTER_FREE_DRAFTER_MODEL') || 'qwen/qwen3-next-80b-a3b-instruct:free',
+    freeCritic:
+      getEnv('OPENROUTER_FREE_CRITIC_MODEL') || 'google/gemini-2.0-flash-exp:free',
+    geminiFreeCritic:
+      getEnv('SPEC_GEMINI_FREE_CRITIC_MODEL') || 'gemini-2.0-flash',
+    geminiLowCritic:
+      getEnv('SPEC_GEMINI_LOW_CRITIC_MODEL') || 'gemini-2.5-pro',
+    kimiLowCritic: getEnv('SPEC_KIMI_LOW_CRITIC_MODEL') || 'moonshot-v1-8k',
     codexCritic: getEnv('SPEC_CODEX_MODEL') || 'openai/codex-mini-latest',
     sonnet: getEnv('ANTHROPIC_MODEL_SONNET') || 'claude-sonnet-4-5',
     opus: getEnv('ANTHROPIC_MODEL_OPUS') || 'claude-opus-4-1',

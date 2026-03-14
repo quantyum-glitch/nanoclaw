@@ -1,0 +1,123 @@
+{
+  "status": "REVIEWED",
+  "mode": "review",
+  "goal": "smoke test kimi fallback",
+  "maxRounds": 2,
+  "roundsUsed": 2,
+  "tierLimit": 2,
+  "allowTier3": false,
+  "tiersUsed": [
+    1,
+    2
+  ],
+  "degraded": true,
+  "unresolvedBlocking": [],
+  "structural": {
+    "hasSummary": true,
+    "hasArchitectureOrApproach": true,
+    "hasTestsOrAcceptance": true,
+    "hasRisks": true,
+    "passed": true,
+    "missing": []
+  },
+  "critics": [
+    {
+      "critic": "FreeCritic",
+      "provider": "openrouter",
+      "model": "openrouter/free",
+      "tier": 1,
+      "available": true,
+      "structured": false,
+      "timedOut": false,
+      "parse": {
+        "assessment": "UNSTRUCTURED",
+        "blockers": [],
+        "structured": false,
+        "error": "Missing ASSESSMENT line."
+      },
+      "raw": "| ID | Severity | Description |Fix |\n|:---|:---|:---|:---|\n| B1 | BLOCKING | Health check reliability is a critical blocker. If the health check mechanism fails to detect primary service outages, the system may not trigger the fallback, leading to service disruption. | Implement redundant health checks with configurable intervals and thresholds. Add monitoring alerts for health check failures. |\n| B2 | BLOCKING | Fallback service performance is a critical blocker. If the fallback service cannot handle the load from the primary service during an outage, it may degrade performance or fail, causing user experience issues. | Conduct load testing on the fallback service under peak load scenarios. Optimize fallback service configuration and resource allocation. |\n| B3 | BLOCKING | Routing complexity is a critical blocker. Incorrect routing configurations could cause requests to be dropped or misrouted, leading to service failures during failover. | Implement automated routing configuration validation. Add comprehensive routing failure detection and alerting. |\n| B4 | BLOCKING | Monitoring and alerting gaps are a critical blocker. Lack of effective monitoring for health checks and fallback events may delay detection and response to failures. | Integrate health check results and fallback events into a centralized monitoring system with real-time alerts. |\n| B5 | BLOCKING | Failure mode handling is a critical blocker. Simultaneous primary and fallback service failures could cause complete system downtime if not properly managed. | Implement a graceful degradation mode with user notifications and fallback to a degraded state. |\n| B6 | BLOCKING | Recovery process is a critical blocker. Slow or incorrect recovery from fallback to primary service could cause service interruptions during restoration. | Automate primary service recovery detection and routing switchback. Implement rollback procedures for failed recoveries. |\n| B7 | BLOCKING | Edge case handling is a critical blocker. Partial failures in the primary service (e.g., endpoint-specific outages) may not trigger the fallback correctly, leading to inconsistent user experiences. | Enhance health check granularity to detect endpoint-specific failures. Implement fallback routing for partial failures. |\n| B8 | BLOCKING | Alerting thresholds are a critical blocker. Inadequate alerting for health check failures or fallback events may delay incident response, exacerbating service disruptions. | Define and implement precise alerting thresholds for health checks and fallback events. Ensure alerts are actionable and monitored 24/7. |\n| B9 | BLOCKING | Fallback service readiness is a critical blocker. If the fallback service is not fully operational or synchronized with the primary service, it may serve stale or incorrect data. | Implement service synchronization checks and data consistency validation between primary and fallback services. |\n| B10 | BLOCKING | Load balancer configuration drift is a critical blocker. Uncontrolled changes to load balancer settings could disrupt failover behavior during outages. | Implement version-controlled load balancer configurations with change approval workflows. |\n| B11 | BLOCKING | Health check failure mode is a critical blocker. If the health check itself fails (e.g., due to network issues), it could mask primary service outages and prevent fallback activation. | Implement health check redundancy with multiple independent health check endpoints. Add health check self-monitoring. |\n| B12 | BLOCKING | Fallback service failover latency is a critical blocker. Slow failover times could result in prolonged service disruptions during primary outages. | Optimize failover logic and reduce health check intervals. Implement proactive failover triggers based on service degradation signals. |\n| B13 | BLOCKING | Monitoring data gaps are a critical blocker. Lack of visibility into fallback service metrics (e.g",
+      "error": "Missing ASSESSMENT line."
+    },
+    {
+      "critic": "KimiCritic",
+      "provider": "kimi",
+      "model": "moonshot-v1-8k",
+      "tier": 2,
+      "available": true,
+      "structured": true,
+      "timedOut": false,
+      "parse": {
+        "assessment": "BLOCKING",
+        "blockers": [
+          {
+            "id": "B1",
+            "severity": "BLOCKING",
+            "description": "No mention of state consistency or data synchronization between primary and fallback services; requests could return stale or conflicting data, violating user expectations and business rules.",
+            "fix": "Add a state-replication or shared-state layer (e.g., shared DB, distributed cache with TTL/invalidation, or idempotent request design) and document the consistency model (eventual, strong, read-your-writes) so the fallback returns data that is acceptably current."
+          }
+        ],
+        "structured": true
+      },
+      "raw": "| ID | Severity | Description | Fix |\n|:---|:---|:---|:---|\n| B1 | BLOCKING | No mention of state consistency or data synchronization between primary and fallback services; requests could return stale or conflicting data, violating user expectations and business rules. | Add a state-replication or shared-state layer (e.g., shared DB, distributed cache with TTL/invalidation, or idempotent request design) and document the consistency model (eventual, strong, read-your-writes) so the fallback returns data that is acceptably current. |\n\nASSESSMENT: BLOCKING"
+    },
+    {
+      "critic": "FreeCritic",
+      "provider": "openrouter",
+      "model": "openrouter/free",
+      "tier": 1,
+      "available": false,
+      "structured": false,
+      "timedOut": false,
+      "parse": {
+        "assessment": "UNSTRUCTURED",
+        "blockers": [],
+        "structured": false,
+        "error": "OpenRouter model openrouter/free returned empty content"
+      },
+      "raw": "",
+      "error": "OpenRouter model openrouter/free returned empty content"
+    },
+    {
+      "critic": "KimiCritic",
+      "provider": "kimi",
+      "model": "moonshot-v1-8k",
+      "tier": 2,
+      "available": true,
+      "structured": false,
+      "timedOut": false,
+      "parse": {
+        "assessment": "UNSTRUCTURED",
+        "blockers": [],
+        "structured": false,
+        "error": "Missing ASSESSMENT line."
+      },
+      "raw": "| ID | Severity | Description | Fix |\n|:---|:---|:---|:---|\n| B1 | BLOCKING | The spec assumes the “shared datastore” (PostgreSQL/Redis) is always writable by both Primary and Fallback, but it never addresses split-brain or dual-write races when the network partitions and both services believe they are active. This can lead to divergent data, lost updates, or corrupted state that the “runtime validator” will detect too late. | Add a leader-elected write-gate (e.g. Raft-based lock or distributed lease via etcd/Consul) so only one service can accept mutating traffic at any time; route writes through the leader and expose read-only mode for the non-leader. Include a fencing token in every write that the datastore enforces, and test partition scenarios in the smoke suite.",
+      "error": "Missing ASSESSMENT line."
+    }
+  ],
+  "notes": [
+    "draft provider gemini failed: HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash\\nPlease retry in 30.885532555s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Learn more about Gemini API quotas\",\n            \"url\": \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\",\n        \"violations\": [\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"model\": \"gemini-2.0-flash\",\n              \"location\": \"global\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\n            \"quotaId\": \"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\n            \"quotaDimensions\": {\n              \"model\": \"gemini-2.0-flash\",\n              \"location\": \"global\"\n            }\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n        \"retryDelay\": \"30s\"\n      }\n    ]\n  }\n}\n",
+    "draft used fallback provider openrouter/openrouter/free after prior provider failure.",
+    "Initial draft model: openrouter/openrouter/free",
+    "FreeCritic returned unstructured output; excluded from blocker merge.",
+    "Review mode fallback: running Kimi critic because primary critic was unavailable/unstructured.",
+    "rewrite provider gemini failed: HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\nPlease retry in 793.013852ms.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Learn more about Gemini API quotas\",\n            \"url\": \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\",\n        \"violations\": [\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\n            \"quotaId\": \"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n        \"retryDelay\": \"0s\"\n      }\n    ]\n  }\n}\n",
+    "rewrite used fallback provider openrouter/openrouter/free after prior provider failure.",
+    "FreeCritic unavailable: OpenRouter model openrouter/free returned empty content",
+    "Review mode fallback: running Kimi critic because primary critic was unavailable/unstructured.",
+    "KimiCritic returned unstructured output; excluded from blocker merge."
+  ],
+  "callCounts": {
+    "gemini:draft": 1,
+    "openrouter:draft:openrouter/free": 1,
+    "openrouter:openrouter/free": 2,
+    "kimi:moonshot-v1-8k": 2,
+    "gemini:rewrite": 1,
+    "openrouter:rewrite:openrouter/free": 1
+  },
+  "timingMs": {
+    "total": 150685,
+    "tier12": 132017,
+    "tier3": 0
+  }
+}

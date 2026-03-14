@@ -6,6 +6,7 @@ import { loadEnvFileIntoProcess } from './lib/env-file.js';
 import {
   DebateMode,
   EXIT_CODES,
+  PipelineEvent,
   PipelineInput,
   PipelineStatus,
   runPipeline,
@@ -17,7 +18,12 @@ interface CliArgs {
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
   outputDir: string;
-  maxRounds: number;
+  repeat: number;
+  enableGemini: boolean;
+  enableKimi: boolean;
+  freeTierOnly: boolean;
+  freeModel?: string;
+  streamJsonEvents: boolean;
 }
 
 function printHelp(): void {
@@ -27,17 +33,22 @@ function printHelp(): void {
       '  node scripts/debate.ts --goal "<text>" [options]',
       '',
       'Options:',
-      '  --mode <default|review|debate|yolo>   Mode (default: default)',
+      '  --mode <free|free+low|debate>         Mode (default: free)',
+      '  --repeat <1..10>                      Repeat rounds (default: 1)',
       '  --tier-limit <1|2|3>                  Max tier (default: 2)',
-      '  --allow-tier-3                        Allow expensive tier after prompt',
+      '  --allow-tier-3                        Allow high-cost high tier in debate mode',
+      '  --with-gemini | --no-gemini           Enable/disable Gemini provider (default: enabled)',
+      '  --with-kimi | --no-kimi               Enable/disable Kimi provider (default: enabled)',
+      '  --free-tier-only                      Force free route only (disables low/high tiers)',
+      '  --free-model <model-id>               Override free OpenRouter drafter model',
       '  --output-dir <path>                   Artifact root (default: ./specs)',
-      '  --max-rounds <1..10>                  Max review rounds (default: 2)',
+      '  --stream-json-events                  Emit step events as JSON lines (SSE bridge friendly)',
       '  --help                                Show help',
       '',
       'Exit codes:',
       `  ${EXIT_CODES.success}  success`,
       `  ${EXIT_CODES.failedBlocker}  FAILED_BLOCKER`,
-      `  ${EXIT_CODES.escalationRequired}  ESCALATION_REQUIRED`,
+      `  ${EXIT_CODES.escalationRequired}  ESCALATION_REQUIRED/NO_HIGH_TIER`,
       `  ${EXIT_CODES.failedExpensive}  FAILED_EXPENSIVE`,
       `  ${EXIT_CODES.providerConfig}  provider/config error`,
     ].join('\n'),
@@ -45,11 +56,9 @@ function printHelp(): void {
 }
 
 function parseMode(raw: string | undefined): DebateMode {
-  if (!raw) return 'default';
+  if (!raw) return 'free';
   const mode = raw.toLowerCase();
-  if (mode === 'default' || mode === 'review' || mode === 'debate' || mode === 'yolo') {
-    return mode;
-  }
+  if (mode === 'free' || mode === 'free+low' || mode === 'debate') return mode;
   throw new Error(`Invalid --mode value: ${raw}`);
 }
 
@@ -60,11 +69,11 @@ function parseTierLimit(raw: string | undefined): 1 | 2 | 3 {
   throw new Error(`Invalid --tier-limit value: ${raw}`);
 }
 
-function parseMaxRounds(raw: string | undefined): number {
-  if (!raw) return 2;
+function parseRepeat(raw: string | undefined): number {
+  if (!raw) return 1;
   const value = Number.parseInt(raw, 10);
   if (!Number.isFinite(value) || value < 1 || value > 10) {
-    throw new Error(`Invalid --max-rounds value: ${raw}. Expected 1..10.`);
+    throw new Error(`Invalid --repeat value: ${raw}. Expected 1..10.`);
   }
   return value;
 }
@@ -75,7 +84,12 @@ function parseArgs(argv: string[]): CliArgs {
   let tierLimitRaw: string | undefined;
   let outputDir = './specs';
   let allowTier3 = false;
-  let maxRoundsRaw: string | undefined;
+  let repeatRaw: string | undefined;
+  let enableGemini = true;
+  let enableKimi = true;
+  let freeTierOnly = false;
+  let freeModel: string | undefined;
+  let streamJsonEvents = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -85,6 +99,30 @@ function parseArgs(argv: string[]): CliArgs {
     }
     if (arg === '--allow-tier-3') {
       allowTier3 = true;
+      continue;
+    }
+    if (arg === '--with-gemini' || arg === '+gemini') {
+      enableGemini = true;
+      continue;
+    }
+    if (arg === '--no-gemini' || arg === '-gemini') {
+      enableGemini = false;
+      continue;
+    }
+    if (arg === '--with-kimi' || arg === '+kimi') {
+      enableKimi = true;
+      continue;
+    }
+    if (arg === '--no-kimi' || arg === '-kimi') {
+      enableKimi = false;
+      continue;
+    }
+    if (arg === '--free-tier-only') {
+      freeTierOnly = true;
+      continue;
+    }
+    if (arg === '--stream-json-events') {
+      streamJsonEvents = true;
       continue;
     }
     const next = argv[i + 1];
@@ -106,8 +144,12 @@ function parseArgs(argv: string[]): CliArgs {
         outputDir = next;
         i += 1;
         break;
-      case '--max-rounds':
-        maxRoundsRaw = next;
+      case '--repeat':
+        repeatRaw = next;
+        i += 1;
+        break;
+      case '--free-model':
+        freeModel = next.trim();
         i += 1;
         break;
       default:
@@ -116,21 +158,37 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   if (!goal) throw new Error('Missing required --goal "<text>"');
+  if (freeTierOnly) {
+    enableGemini = false;
+    enableKimi = false;
+    allowTier3 = false;
+  }
   return {
     goal,
     mode: parseMode(modeRaw),
     tierLimit: parseTierLimit(tierLimitRaw),
     allowTier3,
     outputDir,
-    maxRounds: parseMaxRounds(maxRoundsRaw),
+    repeat: parseRepeat(repeatRaw),
+    enableGemini,
+    enableKimi,
+    freeTierOnly,
+    freeModel,
+    streamJsonEvents,
   };
 }
 
-function printSummary(status: PipelineStatus, outputDir: string, specPath: string): void {
+function printSummary(
+  status: PipelineStatus,
+  outputDir: string,
+  specPath: string,
+  tracePath: string,
+): void {
   console.log('\nRun complete');
   console.log(`  Status: ${status}`);
   console.log(`  Output: ${path.resolve(outputDir)}`);
   console.log(`  Spec:   ${specPath}`);
+  console.log(`  Trace:  ${tracePath}`);
 }
 
 function printSpecToTerminal(spec: string, postReview: string): void {
@@ -150,6 +208,10 @@ function loadDebateEnv(): void {
     'OPENROUTER_BASE_URL',
     'OPENROUTER_FREE_DRAFTER_MODEL',
     'OPENROUTER_FREE_CRITIC_MODEL',
+    'SPEC_FREE_PROMPT_DAILY_LIMIT',
+    'SPEC_GEMINI_FREE_CRITIC_MODEL',
+    'SPEC_GEMINI_LOW_CRITIC_MODEL',
+    'SPEC_KIMI_LOW_CRITIC_MODEL',
     'GEMINI_API_KEY',
     'GEMINI_MODEL',
     'GEMINI_USE_CLI',
@@ -172,6 +234,10 @@ function loadDebateEnv(): void {
   loadEnvFileIntoProcess(keys);
 }
 
+function printEventAsJson(event: PipelineEvent): void {
+  process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
 async function main(): Promise<void> {
   loadDebateEnv();
   let args: CliArgs;
@@ -184,19 +250,29 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.freeModel) {
+    process.env.OPENROUTER_FREE_DRAFTER_MODEL = args.freeModel;
+    process.env.OPENROUTER_FREE_CRITIC_MODEL =
+      process.env.OPENROUTER_FREE_CRITIC_MODEL || args.freeModel;
+  }
+
   const pipelineInput: PipelineInput = {
     goal: args.goal,
     mode: args.mode,
     tierLimit: args.tierLimit,
     allowTier3: args.allowTier3,
-    maxRounds: args.maxRounds,
+    repeat: args.repeat,
+    enableGemini: args.enableGemini,
+    enableKimi: args.enableKimi,
+    freeTierOnly: args.freeTierOnly,
+    onEvent: args.streamJsonEvents ? printEventAsJson : undefined,
   };
 
   console.log(
-    `Starting debate run (mode=${args.mode}, tierLimit=${args.tierLimit}, maxRounds=${args.maxRounds})`,
+    `Starting debate run (mode=${args.mode}, tierLimit=${args.tierLimit}, repeat=${args.repeat})`,
   );
-  const result = await runPipeline(pipelineInput);
 
+  const result = await runPipeline(pipelineInput);
   const artifacts = writeArtifacts({
     outputDir: args.outputDir,
     goal: args.goal,
@@ -204,9 +280,10 @@ async function main(): Promise<void> {
     spec: result.spec,
     postImplementationReview: result.postImplementationReview,
     decision: result.decision,
+    trace: result.trace,
   });
 
-  printSummary(result.status, artifacts.dir, artifacts.specPath);
+  printSummary(result.status, artifacts.dir, artifacts.specPath, artifacts.tracePath);
   printSpecToTerminal(result.spec, result.postImplementationReview);
   process.exit(result.exitCode);
 }

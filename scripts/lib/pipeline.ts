@@ -1,4 +1,3 @@
-import { createInterface } from 'node:readline/promises';
 import process from 'node:process';
 
 import {
@@ -14,24 +13,49 @@ import {
 } from './providers.js';
 import {
   Blocker,
+  CriticNarrativeSections,
   CriticParseResult,
   StructuralCheck,
   dedupeBlockers,
   getBlockingBlockers,
   parseCriticMarkdownTable,
+  parseCriticNarrative,
   structuralRubric,
   trimApproxTokens,
 } from './rubric.js';
 
-export type DebateMode = 'default' | 'review' | 'debate' | 'yolo';
+export type DebateMode = 'free' | 'free+low' | 'debate';
+
 export type PipelineStatus =
-  | 'DRAFT_ONLY'
   | 'REVIEWED'
   | 'UNREVIEWED'
+  | 'DEGRADED_LOW'
   | 'FAILED_BLOCKER'
   | 'ESCALATION_REQUIRED'
   | 'FAILED_EXPENSIVE'
+  | 'NO_HIGH_TIER'
   | 'ERROR';
+
+export type PipelineEventType =
+  | 'step_start'
+  | 'step_done'
+  | 'step_error'
+  | 'round_done'
+  | 'run_done';
+
+export interface PipelineEvent {
+  type: PipelineEventType;
+  ts: string;
+  round?: number;
+  step: string;
+  provider?: string;
+  model?: string;
+  prompt?: string;
+  output?: string;
+  error?: string;
+  timingMs?: number;
+  meta?: Record<string, unknown>;
+}
 
 export const EXIT_CODES = {
   success: 0,
@@ -45,8 +69,9 @@ const LIMITS = {
   draftTokens: 4000,
   critiqueSummaryTokens: 800,
   perCallTimeoutMs: 90_000,
-  tier12BudgetMs: 5 * 60_000,
-  tier3BudgetMs: 8 * 60_000,
+  freeRoundBudgetMs: 3 * 60_000,
+  freeLowRoundBudgetMs: 5 * 60_000,
+  debateRoundBudgetMs: 10 * 60_000,
 } as const;
 
 export interface PipelineInput {
@@ -54,7 +79,11 @@ export interface PipelineInput {
   mode: DebateMode;
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
-  maxRounds: number;
+  repeat: number;
+  enableGemini: boolean;
+  enableKimi: boolean;
+  freeTierOnly: boolean;
+  onEvent?: (event: PipelineEvent) => void;
 }
 
 export interface CriticRun {
@@ -66,6 +95,7 @@ export interface CriticRun {
   structured: boolean;
   timedOut: boolean;
   parse: CriticParseResult;
+  narrative: CriticNarrativeSections;
   raw: string;
   error?: string;
 }
@@ -74,22 +104,39 @@ export interface PipelineDecision {
   status: PipelineStatus;
   mode: DebateMode;
   goal: string;
-  maxRounds: number;
-  roundsUsed: number;
+  repeatRequested: number;
+  repeatRoundsUsed: number;
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
   tiersUsed: number[];
   degraded: boolean;
+  degradedLow: boolean;
   unresolvedBlocking: Blocker[];
   structural: StructuralCheck;
   critics: CriticRun[];
   notes: string[];
   callCounts: Record<string, number>;
+  providerPolicy: {
+    geminiEnabled: boolean;
+    kimiEnabled: boolean;
+    freeTierOnly: boolean;
+    openRouterAvailable: boolean;
+    freeDrafterModel: string;
+    freeCriticModel: string;
+  };
   timingMs: {
     total: number;
-    tier12: number;
-    tier3: number;
+    free: number;
+    low: number;
+    high: number;
   };
+  convergenceReason: 'CLEAN' | 'MAX_REPEAT' | 'BLOCKING' | 'UNREVIEWED' | 'NO_HIGH_TIER' | 'ERROR';
+  freePromptUsage: {
+    used: number;
+    dailyLimit: number;
+    nearLimit: boolean;
+  };
+  costEstimateUsd: number;
 }
 
 export interface PipelineResult {
@@ -98,106 +145,56 @@ export interface PipelineResult {
   spec: string;
   postImplementationReview: string;
   decision: PipelineDecision;
+  trace: PipelineEvent[];
 }
 
-interface DraftResult {
-  text: string;
-  provider: string;
-  model: string;
+interface ProviderPolicy {
+  allowGemini: boolean;
+  allowKimi: boolean;
+  allowOpenRouter: boolean;
+  freeTierOnly: boolean;
 }
 
-function buildDraftPrompt(goal: string): string {
-  return [
-    'You are writing an implementation specification for a software engineer.',
-    `Goal: ${goal}`,
-    '',
-    'Output markdown with these required sections:',
-    '## Summary',
-    '## Architecture',
-    '## Implementation Changes',
-    '## Test Plan',
-    '## Risks',
-    '',
-    'Be concrete and implementation-focused. Include explicit tradeoffs and failure modes.',
-  ].join('\n');
+interface StepContext {
+  input: PipelineInput;
+  decision: PipelineDecision;
+  models: ReturnType<typeof getDefaultModels>;
+  policy: ProviderPolicy;
+  trace: PipelineEvent[];
 }
 
-function buildRewritePrompt(goal: string, currentSpec: string, critique: string): string {
-  return [
-    'Revise the implementation spec based on reviewer feedback.',
-    `Goal: ${goal}`,
-    '',
-    'Current spec:',
-    currentSpec,
-    '',
-    'Reviewer feedback summary:',
-    critique,
-    '',
-    'Return markdown with required sections:',
-    '## Summary',
-    '## Architecture',
-    '## Implementation Changes',
-    '## Test Plan',
-    '## Risks',
-    '',
-    'Resolve all BLOCKING issues where possible.',
-  ].join('\n');
+interface RoundState {
+  spec: string;
+  blockers: Blocker[];
+  hasMinorFindings: boolean;
+  clean: boolean;
+  unreviewed: boolean;
+  degradedLow: boolean;
+  highTierMissing: boolean;
+  highTierExecuted: boolean;
+  structural: StructuralCheck;
+  postSections: string[];
 }
 
-function buildCriticPrompt(
-  goal: string,
-  spec: string,
-  criticFocus: string,
-): string {
-  return [
-    'Review this implementation spec. Return ONLY this format:',
-    '| ID | Severity | Description | Fix |',
-    '|:---|:---|:---|:---|',
-    '| B1 | BLOCKING | ... | ... |',
-    'ASSESSMENT: BLOCKING',
-    '',
-    `Focus: ${criticFocus}`,
-    `Goal: ${goal}`,
-    '',
-    'Rules:',
-    '- Replace ASSESSMENT with exactly one value: CLEAN or MINOR or BLOCKING.',
-    '- Use BLOCKING only for issues that would likely cause failure, data loss, severe security risk, or incorrect architecture.',
-    '- Use MINOR for non-blocking improvements.',
-    '- If no issues, keep only the header + separator rows and write ASSESSMENT: CLEAN.',
-    '',
-    'Spec:',
-    spec,
-  ].join('\n');
+function nowIso(): string {
+  return new Date().toISOString();
 }
 
-function summarizeCritique(raw: string): string {
-  return trimApproxTokens(raw, LIMITS.critiqueSummaryTokens);
+function emitEvent(ctx: StepContext, event: PipelineEvent): void {
+  ctx.trace.push(event);
+  if (ctx.input.onEvent) ctx.input.onEvent(event);
 }
 
-function toReviewMarkdown(run: CriticRun): string {
-  if (!run.available) {
-    return `### ${run.critic}\n- Status: unavailable\n- Error: ${run.error || 'n/a'}\n`;
-  }
-  if (!run.structured) {
-    return `### ${run.critic}\n- Status: UNSTRUCTURED (excluded from blocker merge)\n- Raw:\n\n${run.raw}\n`;
-  }
-  return `### ${run.critic}\n${run.raw}\n`;
+function pushNote(ctx: StepContext, note: string): void {
+  ctx.decision.notes.push(note);
 }
 
-async function promptTier3Approval(): Promise<boolean> {
-  if (!process.stdin.isTTY || !process.stdout.isTTY) return false;
-  const rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
-  try {
-    const answer = await rl.question(
-      'Tier 3 will use Sonnet + Opus (higher cost). Proceed? [y/N]: ',
-    );
-    return /^y(es)?$/i.test(answer.trim());
-  } finally {
-    rl.close();
-  }
+function registerCall(ctx: StepContext, key: string): void {
+  ctx.decision.callCounts[key] = (ctx.decision.callCounts[key] || 0) + 1;
+}
+
+function markTier(ctx: StepContext, tier: 1 | 2 | 3): void {
+  if (!ctx.decision.tiersUsed.includes(tier)) ctx.decision.tiersUsed.push(tier);
 }
 
 function computeExitCode(status: PipelineStatus): number {
@@ -205,6 +202,7 @@ function computeExitCode(status: PipelineStatus): number {
     case 'FAILED_BLOCKER':
       return EXIT_CODES.failedBlocker;
     case 'ESCALATION_REQUIRED':
+    case 'NO_HIGH_TIER':
       return EXIT_CODES.escalationRequired;
     case 'FAILED_EXPENSIVE':
       return EXIT_CODES.failedExpensive;
@@ -215,17 +213,832 @@ function computeExitCode(status: PipelineStatus): number {
   }
 }
 
+function trimOutput(text: string): string {
+  return trimApproxTokens(text, LIMITS.draftTokens);
+}
+
+function summarizeCritique(raw: string): string {
+  return trimApproxTokens(raw, LIMITS.critiqueSummaryTokens);
+}
+
+function hasMinorFindings(runs: CriticRun[]): boolean {
+  return runs.some((run) =>
+    run.parse.blockers.some((blocker) => blocker.severity === 'MINOR'),
+  );
+}
+
+function collectBlocking(runs: CriticRun[]): Blocker[] {
+  const all = runs
+    .filter((run) => run.available && run.structured)
+    .flatMap((run) => getBlockingBlockers(run.parse.blockers));
+  return dedupeBlockers(all);
+}
+
+function buildDraftPrompt(goal: string, priorSpec?: string): string {
+  if (priorSpec?.trim()) {
+    return [
+      'Revise this existing implementation spec for clarity, feasibility, and correctness.',
+      `Goal: ${goal}`,
+      '',
+      'Requirements:',
+      '- Preserve actionable content and tighten ambiguous steps.',
+      '- Optimize for MVP and Pareto outcomes first.',
+      '- Keep style changes minimal unless they remove confusion.',
+      '',
+      'Return markdown with required sections:',
+      '## Summary',
+      '## Architecture',
+      '## Implementation Changes',
+      '## Test Plan',
+      '## Risks',
+      '',
+      'Existing spec:',
+      priorSpec,
+    ].join('\n');
+  }
+
+  return [
+    'You are writing an implementation specification for software engineers.',
+    `Goal: ${goal}`,
+    '',
+    'Requirements:',
+    '- Optimize for MVP and Pareto outcomes first.',
+    '- Focus on concrete, testable implementation steps.',
+    '- Include edge cases and failure modes.',
+    '',
+    'Return markdown with these required sections:',
+    '## Summary',
+    '## Architecture',
+    '## Implementation Changes',
+    '## Test Plan',
+    '## Risks',
+  ].join('\n');
+}
+
+function buildCriticPrompt(goal: string, spec: string, focus: string): string {
+  return [
+    'Review this implementation spec.',
+    '',
+    'Output format (strict):',
+    '| ID | Severity | Description | Fix |',
+    '|:---|:---|:---|:---|',
+    '| B1 | BLOCKING | ... | ... |',
+    'ASSESSMENT: CLEAN|MINOR|BLOCKING',
+    '',
+    'Then include these sections exactly (short bullets):',
+    'AGREEMENTS:',
+    'DISAGREEMENTS:',
+    'HOLES:',
+    'STYLE_ONLY:',
+    'MVP:',
+    'PARETO:',
+    '',
+    `Focus: ${focus}`,
+    `Goal: ${goal}`,
+    '',
+    'Rules:',
+    '- BLOCKING only for critical correctness/security/reliability failures.',
+    '- MINOR for non-blocking improvements.',
+    '- Gate logic uses only blocker table + ASSESSMENT.',
+    '',
+    'Spec to review:',
+    spec,
+  ].join('\n');
+}
+
+function buildRewritePrompt(
+  goal: string,
+  currentSpec: string,
+  feedback: string,
+  tierLabel: 'free' | 'low' | 'high',
+): string {
+  return [
+    `Revise this implementation spec after ${tierLabel.toUpperCase()} critique.`,
+    `Goal: ${goal}`,
+    '',
+    'Priorities:',
+    '- Resolve blockers and holes first.',
+    '- Preserve useful MVP and Pareto improvements.',
+    '- Do not churn style-only items unless they remove ambiguity.',
+    '',
+    'Current spec:',
+    currentSpec,
+    '',
+    'Critique feedback:',
+    feedback,
+    '',
+    'Return markdown with required sections:',
+    '## Summary',
+    '## Architecture',
+    '## Implementation Changes',
+    '## Test Plan',
+    '## Risks',
+  ].join('\n');
+}
+
+function toReviewMarkdown(run: CriticRun): string {
+  if (!run.available) {
+    return `### ${run.critic}\n- Status: unavailable\n- Error: ${run.error || 'n/a'}\n`;
+  }
+  const parts: string[] = [];
+  parts.push(`### ${run.critic}`);
+  parts.push(run.raw.trim() || '(empty output)');
+  parts.push('');
+  parts.push('Parsed narrative:');
+  parts.push(`- Agreements: ${run.narrative.agreements.join(' | ') || 'none'}`);
+  parts.push(
+    `- Disagreements: ${run.narrative.disagreements.join(' | ') || 'none'}`,
+  );
+  parts.push(`- Holes: ${run.narrative.holes.join(' | ') || 'none'}`);
+  parts.push(`- Style-only: ${run.narrative.styleOnly.join(' | ') || 'none'}`);
+  parts.push(`- MVP: ${run.narrative.mvp.join(' | ') || 'none'}`);
+  parts.push(`- Pareto: ${run.narrative.pareto.join(' | ') || 'none'}`);
+  return parts.join('\n');
+}
+
+function resolveProviderPolicy(input: PipelineInput): ProviderPolicy {
+  const allowOpenRouter = canUseOpenRouter();
+  if (input.freeTierOnly) {
+    return {
+      allowGemini: false,
+      allowKimi: false,
+      allowOpenRouter,
+      freeTierOnly: true,
+    };
+  }
+  return {
+    allowGemini: input.enableGemini && canUseGemini(),
+    allowKimi: input.enableKimi && canUseKimi(),
+    allowOpenRouter,
+    freeTierOnly: false,
+  };
+}
+
+async function runStep<T extends { text?: string; raw?: string }>(
+  ctx: StepContext,
+  config: {
+    round: number;
+    step: string;
+    provider: string;
+    model: string;
+    prompt: string;
+    call: () => Promise<T>;
+  },
+): Promise<T> {
+  emitEvent(ctx, {
+    type: 'step_start',
+    ts: nowIso(),
+    round: config.round,
+    step: config.step,
+    provider: config.provider,
+    model: config.model,
+    prompt: config.prompt,
+  });
+  const started = Date.now();
+  try {
+    const result = await config.call();
+    emitEvent(ctx, {
+      type: 'step_done',
+      ts: nowIso(),
+      round: config.round,
+      step: config.step,
+      provider: config.provider,
+      model: config.model,
+      prompt: config.prompt,
+      output: result.text || result.raw || '',
+      timingMs: Date.now() - started,
+    });
+    return result;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    emitEvent(ctx, {
+      type: 'step_error',
+      ts: nowIso(),
+      round: config.round,
+      step: config.step,
+      provider: config.provider,
+      model: config.model,
+      prompt: config.prompt,
+      error: message,
+      timingMs: Date.now() - started,
+    });
+    throw err;
+  }
+}
+
+async function runCritic(
+  ctx: StepContext,
+  config: {
+    round: number;
+    step: string;
+    critic: string;
+    provider: string;
+    model: string;
+    tier: 1 | 2 | 3;
+    prompt: string;
+    call: () => Promise<{ text: string }>;
+  },
+): Promise<CriticRun> {
+  try {
+    registerCall(ctx, `${config.provider}:${config.model}`);
+    const response = await runStep(ctx, {
+      round: config.round,
+      step: config.step,
+      provider: config.provider,
+      model: config.model,
+      prompt: config.prompt,
+      call: config.call,
+    });
+    const raw = response.text.trim();
+    const parse = parseCriticMarkdownTable(raw);
+    const narrative = parseCriticNarrative(raw);
+    const run: CriticRun = {
+      critic: config.critic,
+      provider: config.provider,
+      model: config.model,
+      tier: config.tier,
+      available: true,
+      structured: parse.structured,
+      timedOut: false,
+      parse,
+      narrative,
+      raw,
+      error: parse.error,
+    };
+    if (!parse.structured) {
+      ctx.decision.degraded = true;
+      pushNote(
+        ctx,
+        `${config.critic} returned unstructured output; excluded from blocker merge.`,
+      );
+    }
+    ctx.decision.critics.push(run);
+    return run;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    const run: CriticRun = {
+      critic: config.critic,
+      provider: config.provider,
+      model: config.model,
+      tier: config.tier,
+      available: false,
+      structured: false,
+      timedOut: /timed out/i.test(message),
+      parse: {
+        assessment: 'UNSTRUCTURED',
+        blockers: [],
+        structured: false,
+        error: message,
+      },
+      narrative: {
+        agreements: [],
+        disagreements: [],
+        holes: [],
+        styleOnly: [],
+        mvp: [],
+        pareto: [],
+      },
+      raw: '',
+      error: message,
+    };
+    ctx.decision.degraded = true;
+    pushNote(ctx, `${config.critic} unavailable: ${message}`);
+    ctx.decision.critics.push(run);
+    return run;
+  }
+}
+
+async function draftWithFreePipeline(
+  ctx: StepContext,
+  round: number,
+  prompt: string,
+): Promise<{ text: string; provider: string; model: string }> {
+  const attempts: Array<{
+    provider: string;
+    model: string;
+    call: () => Promise<{ text: string; provider: string; model: string }>;
+  }> = [];
+
+  if (ctx.policy.allowOpenRouter) {
+    attempts.push({
+      provider: 'openrouter',
+      model: ctx.models.freeDrafter,
+      call: async () => {
+        registerCall(ctx, `openrouter:${ctx.models.freeDrafter}`);
+        return await runStep(ctx, {
+          round,
+          step: 'free_draft_qwen',
+          provider: 'openrouter',
+          model: ctx.models.freeDrafter,
+          prompt,
+          call: async () =>
+            await callOpenRouter([{ role: 'user', content: prompt }], {
+              model: ctx.models.freeDrafter,
+              maxOutputTokens: LIMITS.draftTokens,
+              timeoutMs: LIMITS.perCallTimeoutMs,
+              temperature: 0.2,
+            }),
+        });
+      },
+    });
+  }
+
+  if (ctx.policy.allowGemini) {
+    attempts.push({
+      provider: 'gemini',
+      model: ctx.models.geminiFreeCritic,
+      call: async () => {
+        registerCall(ctx, `gemini:${ctx.models.geminiFreeCritic}`);
+        return await runStep(ctx, {
+          round,
+          step: 'free_draft_gemini_fallback',
+          provider: 'gemini',
+          model: ctx.models.geminiFreeCritic,
+          prompt,
+          call: async () =>
+            await callGemini(prompt, {
+              modelOverride: ctx.models.geminiFreeCritic,
+              maxOutputTokens: LIMITS.draftTokens,
+              timeoutMs: LIMITS.perCallTimeoutMs,
+              temperature: 0.2,
+            }),
+        });
+      },
+    });
+  }
+
+  if (attempts.length === 0) {
+    throw new Error(
+      'No free drafter available. Configure OpenRouter free route or Gemini.',
+    );
+  }
+
+  const errors: string[] = [];
+  for (const attempt of attempts) {
+    try {
+      return await attempt.call();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${attempt.provider}/${attempt.model}: ${message}`);
+    }
+  }
+  throw new Error(`All free drafter attempts failed. ${errors.join(' | ')}`);
+}
+
+async function runFreeRound(
+  ctx: StepContext,
+  round: number,
+  goal: string,
+  seedSpec?: string,
+): Promise<RoundState> {
+  markTier(ctx, 1);
+  const roundStart = Date.now();
+  const draftPrompt = buildDraftPrompt(goal, seedSpec);
+  const draft = await draftWithFreePipeline(ctx, round, draftPrompt);
+  let spec = trimOutput(draft.text);
+  pushNote(ctx, `Round ${round}: free draft by ${draft.provider}/${draft.model}`);
+
+  const freeCriticPrompt = buildCriticPrompt(
+    goal,
+    spec,
+    'Architecture and implementation feasibility blockers only.',
+  );
+
+  const criticRuns: CriticRun[] = [];
+  if (ctx.policy.allowGemini) {
+    const geminiCritic = await runCritic(ctx, {
+      round,
+      step: 'free_critic_gemini',
+      critic: 'FreeCriticGemini',
+      provider: 'gemini',
+      model: ctx.models.geminiFreeCritic,
+      tier: 1,
+      prompt: freeCriticPrompt,
+      call: async () =>
+        await callGemini(freeCriticPrompt, {
+          modelOverride: ctx.models.geminiFreeCritic,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        }),
+    });
+    criticRuns.push(geminiCritic);
+  } else if (ctx.policy.allowOpenRouter) {
+    const fallbackCritic = await runCritic(ctx, {
+      round,
+      step: 'free_critic_openrouter_fallback',
+      critic: 'FreeCriticFallback',
+      provider: 'openrouter',
+      model: ctx.models.freeCritic,
+      tier: 1,
+      prompt: freeCriticPrompt,
+      call: async () =>
+        await callOpenRouter([{ role: 'user', content: freeCriticPrompt }], {
+          model: ctx.models.freeCritic,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        }),
+    });
+    criticRuns.push(fallbackCritic);
+    ctx.decision.degraded = true;
+    pushNote(ctx, 'Gemini critic unavailable; used OpenRouter free critic fallback.');
+  }
+
+  let unreviewed = false;
+  if (criticRuns.length === 0 || criticRuns.every((run) => !run.available)) {
+    unreviewed = true;
+    ctx.decision.degraded = true;
+    pushNote(ctx, 'Free round critics unavailable. Round marked UNREVIEWED.');
+  } else {
+    const critiqueSummary = criticRuns
+      .filter((run) => run.available)
+      .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
+      .join('\n\n');
+    const rewritePrompt = buildRewritePrompt(goal, spec, critiqueSummary, 'free');
+    const rewrite = await draftWithFreePipeline(ctx, round, rewritePrompt);
+    spec = trimOutput(rewrite.text);
+  }
+
+  const blocking = collectBlocking(criticRuns);
+  const hasMinor = hasMinorFindings(criticRuns);
+  const structural = structuralRubric(spec);
+  const clean =
+    !unreviewed &&
+    criticRuns.length > 0 &&
+    criticRuns
+      .filter((run) => run.available && run.structured)
+      .every((run) => run.parse.assessment === 'CLEAN') &&
+    blocking.length === 0 &&
+    !hasMinor &&
+    structural.passed;
+
+  if (Date.now() - roundStart > LIMITS.freeRoundBudgetMs) {
+    pushNote(ctx, `Round ${round}: FREE stage exceeded target budget.`);
+  }
+
+  return {
+    spec,
+    blockers: blocking,
+    hasMinorFindings: hasMinor,
+    clean,
+    unreviewed,
+    degradedLow: false,
+    highTierMissing: false,
+    highTierExecuted: false,
+    structural,
+    postSections: criticRuns.map((run) => toReviewMarkdown(run)),
+  };
+}
+
+async function runFreeLowRound(
+  ctx: StepContext,
+  round: number,
+  goal: string,
+  seedSpec?: string,
+): Promise<RoundState> {
+  const roundStart = Date.now();
+  const free = await runFreeRound(ctx, round, goal, seedSpec);
+  let spec = free.spec;
+  const allSections = [...free.postSections];
+  const lowRuns: CriticRun[] = [];
+  let degradedLow = false;
+
+  markTier(ctx, 2);
+  const lowPrompt = buildCriticPrompt(
+    goal,
+    spec,
+    'Security, edge cases, and reliability blockers.',
+  );
+
+  const runLowKimi = async (step: string, critic: string): Promise<CriticRun> =>
+    await runCritic(ctx, {
+      round,
+      step,
+      critic,
+      provider: 'kimi',
+      model: ctx.models.kimiLowCritic,
+      tier: 2,
+      prompt: lowPrompt,
+      call: async () =>
+        await callKimi(lowPrompt, {
+          modelOverride: ctx.models.kimiLowCritic,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        }),
+    });
+
+  const runLowGemini = async (
+    step: string,
+    critic: string,
+  ): Promise<CriticRun> =>
+    await runCritic(ctx, {
+      round,
+      step,
+      critic,
+      provider: 'gemini',
+      model: ctx.models.geminiLowCritic,
+      tier: 2,
+      prompt: lowPrompt,
+      call: async () =>
+        await callGemini(lowPrompt, {
+          modelOverride: ctx.models.geminiLowCritic,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        }),
+    });
+
+  let lowCriticPrimary: CriticRun | undefined;
+  if (ctx.policy.allowKimi) {
+    lowCriticPrimary = await runLowKimi('low_critic_kimi_primary', 'LowCriticKimi');
+  } else if (ctx.policy.allowGemini) {
+    lowCriticPrimary = await runLowGemini(
+      'low_critic_gemini_primary_fallback',
+      'LowCriticGeminiPrimary',
+    );
+  }
+  if (lowCriticPrimary) lowRuns.push(lowCriticPrimary);
+
+  let lowCriticSecond: CriticRun | undefined;
+  if (lowCriticPrimary?.provider === 'kimi' && ctx.policy.allowGemini) {
+    lowCriticSecond = await runLowGemini(
+      'low_critic_gemini_secondary',
+      'LowCriticGeminiSecondary',
+    );
+  } else if (lowCriticPrimary?.provider === 'gemini' && ctx.policy.allowKimi) {
+    lowCriticSecond = await runLowKimi(
+      'low_critic_kimi_secondary',
+      'LowCriticKimiSecondary',
+    );
+  }
+  if (lowCriticSecond) lowRuns.push(lowCriticSecond);
+
+  if (lowRuns.length === 0 || lowRuns.every((run) => !run.available)) {
+    degradedLow = true;
+    ctx.decision.degraded = true;
+    ctx.decision.degradedLow = true;
+    pushNote(ctx, 'Low-tier critics unavailable. Returning FREE result as DEGRADED_LOW.');
+  } else {
+    if (lowRuns.length === 1) {
+      degradedLow = true;
+      ctx.decision.degraded = true;
+      ctx.decision.degradedLow = true;
+      pushNote(ctx, 'Low-tier executed with a single critic (degraded).');
+    }
+    const lowSummary = lowRuns
+      .filter((run) => run.available)
+      .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
+      .join('\n\n');
+
+    const rewritePrompt = buildRewritePrompt(goal, spec, lowSummary, 'low');
+    const reviserProvider =
+      lowRuns.find((run) => run.available && run.provider === 'kimi')?.provider ||
+      lowRuns.find((run) => run.available && run.provider === 'gemini')?.provider;
+
+    if (reviserProvider === 'kimi') {
+      registerCall(ctx, `kimi:${ctx.models.kimiLowCritic}`);
+      const revised = await runStep(ctx, {
+        round,
+        step: 'low_rewrite_kimi',
+        provider: 'kimi',
+        model: ctx.models.kimiLowCritic,
+        prompt: rewritePrompt,
+        call: async () =>
+          await callKimi(rewritePrompt, {
+            modelOverride: ctx.models.kimiLowCritic,
+            maxOutputTokens: LIMITS.draftTokens,
+            timeoutMs: LIMITS.perCallTimeoutMs,
+            temperature: 0.2,
+          }),
+      });
+      spec = trimOutput(revised.text);
+    } else if (reviserProvider === 'gemini') {
+      registerCall(ctx, `gemini:${ctx.models.geminiLowCritic}`);
+      const revised = await runStep(ctx, {
+        round,
+        step: 'low_rewrite_gemini',
+        provider: 'gemini',
+        model: ctx.models.geminiLowCritic,
+        prompt: rewritePrompt,
+        call: async () =>
+          await callGemini(rewritePrompt, {
+            modelOverride: ctx.models.geminiLowCritic,
+            maxOutputTokens: LIMITS.draftTokens,
+            timeoutMs: LIMITS.perCallTimeoutMs,
+            temperature: 0.2,
+          }),
+      });
+      spec = trimOutput(revised.text);
+    }
+  }
+
+  const combinedBlocking = dedupeBlockers([...free.blockers, ...collectBlocking(lowRuns)]);
+  const hasMinor = free.hasMinorFindings || hasMinorFindings(lowRuns);
+  const structural = structuralRubric(spec);
+  const clean =
+    free.clean &&
+    !degradedLow &&
+    lowRuns.length > 0 &&
+    lowRuns
+      .filter((run) => run.available && run.structured)
+      .every((run) => run.parse.assessment === 'CLEAN') &&
+    combinedBlocking.length === 0 &&
+    !hasMinor &&
+    structural.passed;
+
+  allSections.push(...lowRuns.map((run) => toReviewMarkdown(run)));
+  if (Date.now() - roundStart > LIMITS.freeLowRoundBudgetMs) {
+    pushNote(ctx, `Round ${round}: FREE+LOW stage exceeded target budget.`);
+  }
+
+  return {
+    spec,
+    blockers: combinedBlocking,
+    hasMinorFindings: hasMinor,
+    clean,
+    unreviewed: free.unreviewed,
+    degradedLow,
+    highTierMissing: false,
+    highTierExecuted: false,
+    structural,
+    postSections: allSections,
+  };
+}
+
+async function runDebateRound(
+  ctx: StepContext,
+  round: number,
+  goal: string,
+  seedSpec?: string,
+): Promise<RoundState> {
+  const roundStart = Date.now();
+  const low = await runFreeLowRound(ctx, round, goal, seedSpec);
+  let spec = low.spec;
+  const sections = [...low.postSections];
+  let highTierMissing = false;
+  let highTierExecuted = false;
+
+  const highEnabled =
+    !ctx.policy.freeTierOnly &&
+    ctx.input.allowTier3 &&
+    ctx.input.tierLimit >= 3 &&
+    ctx.policy.allowOpenRouter &&
+    hasEnv('ANTHROPIC_API_KEY');
+
+  if (!highEnabled) {
+    highTierMissing = true;
+    pushNote(
+      ctx,
+      'Debate mode requested but high tier unavailable (allow-tier-3/tier-limit/key/provider missing).',
+    );
+    if (Date.now() - roundStart > LIMITS.debateRoundBudgetMs) {
+      pushNote(ctx, `Round ${round}: DEBATE stage exceeded target budget.`);
+    }
+    return {
+      ...low,
+      highTierMissing,
+      highTierExecuted,
+    };
+  }
+
+  markTier(ctx, 3);
+  highTierExecuted = true;
+
+  const codexPrompt = buildCriticPrompt(
+    goal,
+    spec,
+    'Implementation feasibility blockers and test coverage gaps only.',
+  );
+  const codexCritic = await runCritic(ctx, {
+    round,
+    step: 'high_critic_codex',
+    critic: 'CodexCritic',
+    provider: 'openrouter',
+    model: ctx.models.codexCritic,
+    tier: 3,
+    prompt: codexPrompt,
+    call: async () =>
+      await callOpenRouter([{ role: 'user', content: codexPrompt }], {
+        model: ctx.models.codexCritic,
+        maxOutputTokens: 1200,
+        timeoutMs: LIMITS.perCallTimeoutMs,
+        temperature: 0.1,
+      }),
+  });
+
+  const claudeCriticPrompt = buildCriticPrompt(
+    goal,
+    spec,
+    'Architecture and long-term maintainability blockers.',
+  );
+  const claudeCritic = await runCritic(ctx, {
+    round,
+    step: 'high_critic_claude',
+    critic: 'ClaudeCritic',
+    provider: 'anthropic',
+    model: ctx.models.opus,
+    tier: 3,
+    prompt: claudeCriticPrompt,
+    call: async () =>
+      await callAnthropic(claudeCriticPrompt, {
+        model: ctx.models.opus,
+        maxOutputTokens: 1200,
+        timeoutMs: LIMITS.perCallTimeoutMs,
+        temperature: 0.1,
+      }),
+  });
+
+  const highSummary = [codexCritic, claudeCritic]
+    .filter((run) => run.available)
+    .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
+    .join('\n\n');
+
+  registerCall(ctx, `anthropic:${ctx.models.sonnet}`);
+  const rewritePrompt = buildRewritePrompt(goal, spec, highSummary, 'high');
+  const rewritten = await runStep(ctx, {
+    round,
+    step: 'high_rewrite_claude',
+    provider: 'anthropic',
+    model: ctx.models.sonnet,
+    prompt: rewritePrompt,
+    call: async () =>
+      await callAnthropic(rewritePrompt, {
+        model: ctx.models.sonnet,
+        maxOutputTokens: LIMITS.draftTokens,
+        timeoutMs: LIMITS.perCallTimeoutMs,
+        temperature: 0.2,
+      }),
+  });
+  spec = trimOutput(rewritten.text);
+
+  const highBlocking = collectBlocking([codexCritic, claudeCritic]);
+  const blockers = dedupeBlockers([...low.blockers, ...highBlocking]);
+  const hasMinor = low.hasMinorFindings || hasMinorFindings([codexCritic, claudeCritic]);
+  const structural = structuralRubric(spec);
+  const clean =
+    low.clean &&
+    [codexCritic, claudeCritic]
+      .filter((run) => run.available && run.structured)
+      .every((run) => run.parse.assessment === 'CLEAN') &&
+    blockers.length === 0 &&
+    !hasMinor &&
+    structural.passed;
+
+  sections.push(toReviewMarkdown(codexCritic), toReviewMarkdown(claudeCritic));
+  if (Date.now() - roundStart > LIMITS.debateRoundBudgetMs) {
+    pushNote(ctx, `Round ${round}: DEBATE stage exceeded target budget.`);
+  }
+
+  return {
+    spec,
+    blockers,
+    hasMinorFindings: hasMinor,
+    clean,
+    unreviewed: low.unreviewed,
+    degradedLow: low.degradedLow,
+    highTierMissing,
+    highTierExecuted,
+    structural,
+    postSections: sections,
+  };
+}
+
+function estimateCostUsd(callCounts: Record<string, number>): number {
+  let total = 0;
+  for (const [key, count] of Object.entries(callCounts)) {
+    const lower = key.toLowerCase();
+    if (lower.includes(':free')) continue;
+    if (lower.startsWith('openrouter:openai/codex')) total += count * 0.01;
+    else if (lower.startsWith('anthropic:') && lower.includes('opus')) total += count * 0.3;
+    else if (lower.startsWith('anthropic:')) total += count * 0.1;
+    else if (lower.startsWith('kimi:')) total += count * 0.003;
+    else if (lower.startsWith('gemini:') && lower.includes('2.5-pro')) total += count * 0.005;
+    else if (lower.startsWith('gemini:')) total += count * 0.001;
+    else if (lower.startsWith('openrouter:')) total += count * 0.002;
+  }
+  return Number(total.toFixed(4));
+}
+
+function countFreeCalls(callCounts: Record<string, number>): number {
+  return Object.entries(callCounts)
+    .filter(([key]) => key.toLowerCase().includes(':free'))
+    .reduce((sum, [, count]) => sum + count, 0);
+}
+
 function initDecision(input: PipelineInput): PipelineDecision {
   return {
     status: 'ERROR',
     mode: input.mode,
     goal: input.goal,
-    maxRounds: input.maxRounds,
-    roundsUsed: 0,
+    repeatRequested: input.repeat,
+    repeatRoundsUsed: 0,
     tierLimit: input.tierLimit,
     allowTier3: input.allowTier3,
     tiersUsed: [],
     degraded: false,
+    degradedLow: false,
     unresolvedBlocking: [],
     structural: {
       hasSummary: false,
@@ -238,618 +1051,177 @@ function initDecision(input: PipelineInput): PipelineDecision {
     critics: [],
     notes: [],
     callCounts: {},
+    providerPolicy: {
+      geminiEnabled: false,
+      kimiEnabled: false,
+      freeTierOnly: input.freeTierOnly,
+      openRouterAvailable: false,
+      freeDrafterModel: '',
+      freeCriticModel: '',
+    },
     timingMs: {
       total: 0,
-      tier12: 0,
-      tier3: 0,
+      free: 0,
+      low: 0,
+      high: 0,
     },
+    convergenceReason: 'ERROR',
+    freePromptUsage: {
+      used: 0,
+      dailyLimit: Number.parseInt(process.env.SPEC_FREE_PROMPT_DAILY_LIMIT || '50', 10) || 50,
+      nearLimit: false,
+    },
+    costEstimateUsd: 0,
   };
 }
 
-function registerCall(decision: PipelineDecision, key: string): void {
-  decision.callCounts[key] = (decision.callCounts[key] || 0) + 1;
-}
-
-function markTier(decision: PipelineDecision, tier: 1 | 2 | 3): void {
-  if (!decision.tiersUsed.includes(tier)) decision.tiersUsed.push(tier);
-}
-
-async function generateDraftWithFallback(
-  decision: PipelineDecision,
-  models: ReturnType<typeof getDefaultModels>,
-  prompt: string,
-  stage: 'draft' | 'rewrite' | 'codex-rewrite',
-): Promise<DraftResult> {
-  const errors: string[] = [];
-  const canOpenRouter = canUseOpenRouter();
-  const attempts: Array<{
-    label: string;
-    invoke: () => Promise<DraftResult>;
-  }> = [];
-
-  if (canUseGemini()) {
-    attempts.push({
-      label: 'gemini',
-      invoke: async () => {
-        registerCall(decision, `gemini:${stage}`);
-        const result = await callGemini(prompt, {
-          maxOutputTokens: LIMITS.draftTokens,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.2,
-        });
-        return {
-          text: result.text,
-          provider: result.provider,
-          model: result.model,
-        };
-      },
-    });
-  }
-
-  if (canOpenRouter) {
-    attempts.push({
-      label: 'openrouter',
-      invoke: async () => {
-        registerCall(decision, `openrouter:${stage}:${models.freeDrafter}`);
-        const result = await callOpenRouter([{ role: 'user', content: prompt }], {
-          model: models.freeDrafter,
-          maxOutputTokens: LIMITS.draftTokens,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.2,
-        });
-        return {
-          text: result.text,
-          provider: result.provider,
-          model: result.model,
-        };
-      },
-    });
-  }
-
-  if (canUseKimi()) {
-    attempts.push({
-      label: 'kimi',
-      invoke: async () => {
-        registerCall(decision, `kimi:${stage}`);
-        const result = await callKimi(prompt, {
-          maxOutputTokens: LIMITS.draftTokens,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.2,
-        });
-        return {
-          text: result.text,
-          provider: result.provider,
-          model: result.model,
-        };
-      },
-    });
-  }
-
-  if (attempts.length === 0) {
-    throw new Error(
-      'No draft provider available. Configure Gemini, OpenRouter, or Kimi provider (API key and/or CLI mode).',
-    );
-  }
-
-  for (let i = 0; i < attempts.length; i += 1) {
-    const attempt = attempts[i];
-    try {
-      const draft = await attempt.invoke();
-      if (i > 0) {
-        decision.degraded = true;
-        decision.notes.push(
-          `${stage} used fallback provider ${draft.provider}/${draft.model} after prior provider failure.`,
-        );
-      }
-      return draft;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      errors.push(`${attempt.label}: ${message}`);
-      decision.notes.push(`${stage} provider ${attempt.label} failed: ${message}`);
-    }
-  }
-
-  throw new Error(`All draft providers failed for ${stage}. ${errors.join(' | ')}`);
-}
-
-async function runCritic(
-  decision: PipelineDecision,
-  config: {
-    critic: string;
-    provider: string;
-    model: string;
-    tier: 1 | 2 | 3;
-    prompt: string;
-    invoke: () => Promise<string>;
-  },
-): Promise<CriticRun> {
-  try {
-    registerCall(decision, `${config.provider}:${config.model}`);
-    const raw = (await config.invoke()).trim();
-    const parse = parseCriticMarkdownTable(raw);
-    const run: CriticRun = {
-      critic: config.critic,
-      provider: config.provider,
-      model: config.model,
-      tier: config.tier,
-      available: true,
-      structured: parse.structured,
-      timedOut: false,
-      parse,
-      raw,
-      error: parse.error,
-    };
-    if (!parse.structured) {
-      decision.degraded = true;
-      decision.notes.push(
-        `${config.critic} returned unstructured output; excluded from blocker merge.`,
-      );
-    } else if (parse.error) {
-      decision.notes.push(`${config.critic}: ${parse.error}`);
-    }
-    decision.critics.push(run);
-    return run;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    const timedOut = /timed out/i.test(message);
-    const run: CriticRun = {
-      critic: config.critic,
-      provider: config.provider,
-      model: config.model,
-      tier: config.tier,
-      available: false,
-      structured: false,
-      timedOut,
-      parse: {
-        assessment: 'UNSTRUCTURED',
-        blockers: [],
-        structured: false,
-        error: message,
-      },
-      raw: '',
-      error: message,
-    };
-    decision.degraded = true;
-    decision.notes.push(`${config.critic} unavailable: ${message}`);
-    decision.critics.push(run);
-    return run;
-  }
-}
-
-function collectBlocking(critics: CriticRun[]): Blocker[] {
-  const blocking = critics
-    .filter((c) => c.available && c.structured)
-    .flatMap((c) => getBlockingBlockers(c.parse.blockers));
-  return dedupeBlockers(blocking);
-}
-
-function bothUnavailable(critics: CriticRun[]): boolean {
-  return critics.every((c) => !c.available);
-}
-
 export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
-  const start = Date.now();
+  const started = Date.now();
   const decision = initDecision(input);
   const models = getDefaultModels();
+  const policy = resolveProviderPolicy(input);
+  const trace: PipelineEvent[] = [];
+
+  const ctx: StepContext = {
+    input,
+    decision,
+    models,
+    policy,
+    trace,
+  };
+
+  decision.providerPolicy = {
+    geminiEnabled: policy.allowGemini,
+    kimiEnabled: policy.allowKimi,
+    freeTierOnly: policy.freeTierOnly,
+    openRouterAvailable: policy.allowOpenRouter,
+    freeDrafterModel: models.freeDrafter,
+    freeCriticModel: models.freeCritic,
+  };
+
   let finalSpec = '';
   let postReview = '';
+  let lastRound: RoundState | undefined;
 
   try {
-    const initialDraft = await generateDraftWithFallback(
-      decision,
-      models,
-      buildDraftPrompt(input.goal),
-      'draft',
-    );
-    finalSpec = trimApproxTokens(initialDraft.text, LIMITS.draftTokens);
-    decision.structural = structuralRubric(finalSpec);
-    decision.notes.push(
-      `Initial draft model: ${initialDraft.provider}/${initialDraft.model}`,
-    );
-
-    if (input.mode === 'default' || input.mode === 'yolo') {
-      decision.status = 'DRAFT_ONLY';
-      if (!decision.structural.passed) {
-        decision.notes.push(
-          `Structural rubric missing: ${decision.structural.missing.join(', ')}`,
-        );
-      }
-      postReview = `Mode: ${input.mode}. No critic pass executed. Human review required before implementation.`;
-      const end = Date.now();
-      decision.timingMs.total = end - start;
-      decision.timingMs.tier12 = end - start;
-      return {
-        status: decision.status,
-        exitCode: computeExitCode(decision.status),
-        spec: finalSpec,
-        postImplementationReview: postReview,
-        decision,
-      };
-    }
-
-    const tier12Start = Date.now();
-    let unresolved: Blocker[] = [];
-    let roundsUsed = 0;
-    let unreviewed = false;
-
-    for (let round = 1; round <= input.maxRounds; round += 1) {
-      roundsUsed = round;
-      if (Date.now() - tier12Start > LIMITS.tier12BudgetMs) {
-        decision.notes.push('Tier 1+2 budget exhausted.');
-        break;
-      }
-
-      const criticTasks: Array<Promise<CriticRun>> = [];
-      const canOpenRouter = canUseOpenRouter();
-      const canKimi = canUseKimi();
-
-      if (canOpenRouter) {
-        markTier(decision, 1);
-        const prompt = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Architecture and implementation feasibility blockers only.',
-        );
-        criticTasks.push(
-          runCritic(decision, {
-            critic: 'FreeCritic',
-            provider: 'openrouter',
-            model: models.freeCritic,
-            tier: 1,
-            prompt,
-            invoke: async () => {
-              const response = await callOpenRouter(
-                [{ role: 'user', content: prompt }],
-                {
-                  model: models.freeCritic,
-                  maxOutputTokens: 1000,
-                  timeoutMs: LIMITS.perCallTimeoutMs,
-                },
-              );
-              return response.text;
-            },
-          }),
-        );
-      }
-
-      if (
-        input.mode === 'review' &&
-        !canOpenRouter &&
-        input.tierLimit >= 2 &&
-        canKimi
-      ) {
-        markTier(decision, 2);
-        const prompt = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Architecture, security, and edge-case blockers.',
-        );
-        criticTasks.push(
-          runCritic(decision, {
-            critic: 'KimiCritic',
-            provider: 'kimi',
-            model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
-            tier: 2,
-            prompt,
-            invoke: async () => {
-              const response = await callKimi(prompt, {
-                maxOutputTokens: 1000,
-                timeoutMs: LIMITS.perCallTimeoutMs,
-                temperature: 0.2,
-              });
-              return response.text;
-            },
-          }),
-        );
-      }
-
-      if (input.mode === 'debate' && input.tierLimit >= 2 && canKimi) {
-        markTier(decision, 2);
-        const prompt = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Security, edge cases, and reliability blockers.',
-        );
-        criticTasks.push(
-          runCritic(decision, {
-            critic: 'KimiCritic',
-            provider: 'kimi',
-            model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
-            tier: 2,
-            prompt,
-            invoke: async () => {
-              const response = await callKimi(prompt, {
-                maxOutputTokens: 1000,
-                timeoutMs: LIMITS.perCallTimeoutMs,
-                temperature: 0.2,
-              });
-              return response.text;
-            },
-          }),
-        );
-      }
-
-      let critics = await Promise.all(criticTasks);
-      const hasStructuredCritic = critics.some((c) => c.available && c.structured);
-      if (
-        input.mode === 'review' &&
-        input.tierLimit >= 2 &&
-        canKimi &&
-        !hasStructuredCritic &&
-        !critics.some((c) => c.critic === 'KimiCritic')
-      ) {
-        markTier(decision, 2);
-        decision.notes.push(
-          'Review mode fallback: running Kimi critic because primary critic was unavailable/unstructured.',
-        );
-        const prompt = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Architecture, security, and edge-case blockers.',
-        );
-        const kimiFallback = await runCritic(decision, {
-          critic: 'KimiCritic',
-          provider: 'kimi',
-          model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
-          tier: 2,
-          prompt,
-          invoke: async () => {
-            const response = await callKimi(prompt, {
-              maxOutputTokens: 1000,
-              timeoutMs: LIMITS.perCallTimeoutMs,
-              temperature: 0.2,
-            });
-            return response.text;
-          },
-        });
-        critics = [...critics, kimiFallback];
-      }
-      if (critics.length === 0 || bothUnavailable(critics)) {
-        unreviewed = true;
-        decision.degraded = true;
-        decision.notes.push(
-          'All critics unavailable. Returning UNREVIEWED draft with warning banner.',
-        );
-        break;
-      }
-
-      unresolved = collectBlocking(critics);
-      decision.structural = structuralRubric(finalSpec);
-      if (unresolved.length === 0 && decision.structural.passed) {
-        break;
-      }
-      if (round >= input.maxRounds) {
-        break;
-      }
-
-      const critiqueSummaries = critics
-        .filter((c) => c.available)
-        .map((c) => `### ${c.critic}\n${summarizeCritique(c.raw)}`)
-        .join('\n\n');
-
-      const rewrite = await generateDraftWithFallback(
-        decision,
-        models,
-        buildRewritePrompt(input.goal, finalSpec, critiqueSummaries),
-        'rewrite',
+    if (!policy.allowOpenRouter && !policy.allowGemini) {
+      throw new Error(
+        'No drafter available. Configure OpenRouter free route or Gemini.',
       );
-      finalSpec = trimApproxTokens(rewrite.text, LIMITS.draftTokens);
     }
 
-    decision.roundsUsed = roundsUsed;
-    decision.unresolvedBlocking = unresolved;
+    const repeat = Math.max(1, Math.min(10, input.repeat));
+    let seedSpec: string | undefined;
 
-    if (unreviewed) {
-      decision.status = 'UNREVIEWED';
-      postReview = 'Critics unavailable. Treat this plan as unreviewed.';
-    } else if (unresolved.length > 0 || !decision.structural.passed) {
-      if (
-        input.allowTier3 &&
-        input.tierLimit >= 3 &&
-        hasEnv('ANTHROPIC_API_KEY')
-      ) {
-        const approved = await promptTier3Approval();
-        if (!approved) {
-          decision.status = 'ESCALATION_REQUIRED';
-          decision.notes.push('Tier 3 escalation was declined.');
-          postReview =
-            'Escalation required for unresolved blockers. Tier 3 not approved.';
-        } else {
-          const tier3Start = Date.now();
-          markTier(decision, 3);
-          registerCall(decision, `anthropic:${models.sonnet}`);
-          const sonnetRewrite = await callAnthropic(
-            buildRewritePrompt(
-              input.goal,
-              finalSpec,
-              unresolved
-                .map((b) => `- ${b.id} (${b.severity}): ${b.description} -> ${b.fix}`)
-                .join('\n'),
-            ),
-            {
-              model: models.sonnet,
-              maxOutputTokens: LIMITS.draftTokens,
-              timeoutMs: LIMITS.perCallTimeoutMs,
-              temperature: 0.2,
-            },
-          );
-          finalSpec = trimApproxTokens(sonnetRewrite.text, LIMITS.draftTokens);
-
-          const opusPrompt = buildCriticPrompt(
-            input.goal,
-            finalSpec,
-            'Blocking architectural and security flaws only.',
-          );
-          registerCall(decision, `anthropic:${models.opus}`);
-          const opusCritic = await runCritic(decision, {
-            critic: 'OpusCritic',
-            provider: 'anthropic',
-            model: models.opus,
-            tier: 3,
-            prompt: opusPrompt,
-            invoke: async () => {
-              const response = await callAnthropic(opusPrompt, {
-                model: models.opus,
-                maxOutputTokens: 1000,
-                timeoutMs: LIMITS.perCallTimeoutMs,
-                temperature: 0.1,
-              });
-              return response.text;
-            },
-          });
-
-          const opusBlocking = getBlockingBlockers(opusCritic.parse.blockers);
-          if (opusBlocking.length > 0) {
-            decision.status = 'FAILED_EXPENSIVE';
-            decision.unresolvedBlocking = opusBlocking;
-            postReview = toReviewMarkdown(opusCritic);
-          } else {
-            decision.status = 'REVIEWED';
-            postReview = toReviewMarkdown(opusCritic);
-          }
-          decision.timingMs.tier3 = Date.now() - tier3Start;
-          if (decision.timingMs.tier3 > LIMITS.tier3BudgetMs) {
-            decision.notes.push('Tier 3 exceeded target time budget.');
-          }
-        }
+    for (let round = 1; round <= repeat; round += 1) {
+      const stageStart = Date.now();
+      let roundState: RoundState;
+      if (input.mode === 'free') {
+        roundState = await runFreeRound(ctx, round, input.goal, seedSpec);
+        decision.timingMs.free += Date.now() - stageStart;
+      } else if (input.mode === 'free+low') {
+        roundState = await runFreeLowRound(ctx, round, input.goal, seedSpec);
+        decision.timingMs.low += Date.now() - stageStart;
       } else {
-        decision.status = input.allowTier3 ? 'ESCALATION_REQUIRED' : 'FAILED_BLOCKER';
-        if (decision.status === 'ESCALATION_REQUIRED') {
-          decision.notes.push(
-            'Tier 3 requested but unavailable (missing key or tier-limit < 3).',
-          );
-        }
-        postReview = unresolved
-          .map((b) => `- ${b.id} (${b.severity}): ${b.description} -> ${b.fix}`)
-          .join('\n');
+        roundState = await runDebateRound(ctx, round, input.goal, seedSpec);
+        decision.timingMs.high += Date.now() - stageStart;
       }
+
+      finalSpec = roundState.spec;
+      decision.structural = roundState.structural;
+      decision.unresolvedBlocking = roundState.blockers;
+      decision.repeatRoundsUsed = round;
+      decision.degradedLow = decision.degradedLow || roundState.degradedLow;
+      decision.degraded = decision.degraded || roundState.unreviewed || roundState.degradedLow;
+      seedSpec = finalSpec;
+      lastRound = roundState;
+
+      emitEvent(ctx, {
+        type: 'round_done',
+        ts: nowIso(),
+        round,
+        step: 'round_done',
+        meta: {
+          mode: input.mode,
+          clean: roundState.clean,
+          blockers: roundState.blockers.length,
+          minors: roundState.hasMinorFindings,
+          structuralPassed: roundState.structural.passed,
+          highTierMissing: roundState.highTierMissing,
+        },
+      });
+
+      if (roundState.clean) {
+        decision.convergenceReason = 'CLEAN';
+        break;
+      }
+      if (round === repeat) {
+        decision.convergenceReason =
+          roundState.unreviewed
+            ? 'UNREVIEWED'
+            : roundState.highTierMissing
+              ? 'NO_HIGH_TIER'
+              : roundState.blockers.length > 0
+                ? 'BLOCKING'
+                : 'MAX_REPEAT';
+      }
+    }
+
+    if (!lastRound) throw new Error('Pipeline ended without producing a round.');
+
+    if (lastRound.unreviewed) {
+      decision.status = 'UNREVIEWED';
+    } else if (input.mode === 'debate' && lastRound.highTierMissing) {
+      decision.status = 'NO_HIGH_TIER';
+    } else if (!decision.structural.passed) {
+      decision.status =
+        input.mode === 'debate' && lastRound.highTierExecuted
+          ? 'FAILED_EXPENSIVE'
+          : 'FAILED_BLOCKER';
+      pushNote(
+        ctx,
+        `Structural rubric failed: ${decision.structural.missing.join(', ')}`,
+      );
+    } else if (decision.unresolvedBlocking.length > 0) {
+      if (input.mode === 'debate' && !input.allowTier3) {
+        decision.status = 'ESCALATION_REQUIRED';
+      } else if (input.mode === 'debate' && lastRound.highTierExecuted) {
+        decision.status = 'FAILED_EXPENSIVE';
+      } else {
+        decision.status = 'FAILED_BLOCKER';
+      }
+    } else if (decision.degradedLow) {
+      decision.status = 'DEGRADED_LOW';
     } else {
       decision.status = 'REVIEWED';
-      postReview = 'Review loop passed with no unresolved blocking issues.';
     }
 
-    if (input.mode === 'debate' && decision.status !== 'FAILED_EXPENSIVE') {
-      const sections: string[] = [];
-      if (input.tierLimit >= 2 && canUseOpenRouter()) {
-        markTier(decision, 2);
-        const codexPrompt = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Implementation feasibility, test gaps, and migration risks.',
-        );
-        const codexCritic = await runCritic(decision, {
-          critic: 'CodexFinalCritic',
-          provider: 'openrouter',
-          model: models.codexCritic,
-          tier: 2,
-          prompt: codexPrompt,
-          invoke: async () => {
-            const response = await callOpenRouter(
-              [{ role: 'user', content: codexPrompt }],
-              {
-                model: models.codexCritic,
-                maxOutputTokens: 1200,
-                timeoutMs: LIMITS.perCallTimeoutMs,
-                temperature: 0.1,
-              },
-            );
-            return response.text;
-          },
-        });
-        sections.push('### Codex Final Critic', codexCritic.raw || '(no output)');
-
-        if (codexCritic.available && codexCritic.structured) {
-          const codexBlocking = getBlockingBlockers(codexCritic.parse.blockers);
-          if (codexBlocking.length > 0) {
-            const codexSummary = summarizeCritique(codexCritic.raw);
-            const rewrite = await generateDraftWithFallback(
-              decision,
-              models,
-              buildRewritePrompt(input.goal, finalSpec, codexSummary),
-              'codex-rewrite',
-            );
-            finalSpec = trimApproxTokens(rewrite.text, LIMITS.draftTokens);
-            sections.push(
-              'Codex reported BLOCKING issues; draft was revised before rebound check.',
-            );
-          }
-        }
-
-        const reboundTasks: Array<Promise<CriticRun>> = [];
-        const reboundPromptFree = buildCriticPrompt(
-          input.goal,
-          finalSpec,
-          'Rebound check for remaining blockers after codex-informed revision.',
-        );
-        reboundTasks.push(
-          runCritic(decision, {
-            critic: 'FreeCriticRebound',
-            provider: 'openrouter',
-            model: models.freeCritic,
-            tier: 1,
-            prompt: reboundPromptFree,
-            invoke: async () => {
-              const response = await callOpenRouter(
-                [{ role: 'user', content: reboundPromptFree }],
-                {
-                  model: models.freeCritic,
-                  maxOutputTokens: 1000,
-                  timeoutMs: LIMITS.perCallTimeoutMs,
-                },
-              );
-              return response.text;
-            },
-          }),
-        );
-        if (canUseKimi()) {
-          const reboundPromptKimi = buildCriticPrompt(
-            input.goal,
-            finalSpec,
-            'Rebound check with focus on security and edge conditions.',
-          );
-          reboundTasks.push(
-            runCritic(decision, {
-              critic: 'KimiRebound',
-              provider: 'kimi',
-              model: process.env.KIMI_MODEL || 'moonshot-v1-8k',
-              tier: 2,
-              prompt: reboundPromptKimi,
-              invoke: async () => {
-                const response = await callKimi(reboundPromptKimi, {
-                  maxOutputTokens: 1000,
-                  timeoutMs: LIMITS.perCallTimeoutMs,
-                });
-                return response.text;
-              },
-            }),
-          );
-        }
-        const reboundRuns = await Promise.all(reboundTasks);
-        const reboundBlocking = collectBlocking(reboundRuns);
-        if (reboundBlocking.length > 0) {
-          decision.notes.push(
-            `Rebound check found ${reboundBlocking.length} remaining blocking issue(s). Human decision required.`,
-          );
-        }
-        sections.push(
-          ...reboundRuns.map((run) => toReviewMarkdown(run)),
-          reboundBlocking.length > 0
-            ? `Remaining BLOCKING issues after rebound:\n${reboundBlocking
-                .map((b) => `- ${b.id}: ${b.description} -> ${b.fix}`)
-                .join('\n')}`
-            : 'Rebound check found no BLOCKING issues.',
-        );
-      } else {
-        sections.push(
-          'Codex final critic skipped (tier-limit < 2 or OpenRouter credentials missing).',
-        );
-      }
-      postReview = [postReview, sections.join('\n\n')].filter(Boolean).join('\n\n');
+    postReview = lastRound.postSections.join('\n\n').trim();
+    if (!postReview) {
+      postReview =
+        decision.status === 'NO_HIGH_TIER'
+          ? 'Debate high tier was not available; returned lower-tier result.'
+          : 'No post-review details available.';
     }
 
-    const end = Date.now();
-    decision.timingMs.total = end - start;
-    decision.timingMs.tier12 = end - tier12Start;
+    decision.costEstimateUsd = estimateCostUsd(decision.callCounts);
+    decision.freePromptUsage.used = countFreeCalls(decision.callCounts);
+    decision.freePromptUsage.nearLimit =
+      decision.freePromptUsage.used >=
+      Math.floor(decision.freePromptUsage.dailyLimit * 0.8);
+    decision.timingMs.total = Date.now() - started;
+
+    emitEvent(ctx, {
+      type: 'run_done',
+      ts: nowIso(),
+      step: 'run_done',
+      meta: {
+        status: decision.status,
+        roundsUsed: decision.repeatRoundsUsed,
+        costEstimateUsd: decision.costEstimateUsd,
+        freePromptUsage: decision.freePromptUsage,
+      },
+    });
 
     return {
       status: decision.status,
@@ -857,18 +1229,35 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       spec: finalSpec,
       postImplementationReview: postReview,
       decision,
+      trace,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     decision.status = 'ERROR';
+    decision.convergenceReason = 'ERROR';
     decision.notes.push(`Pipeline error: ${message}`);
-    decision.timingMs.total = Date.now() - start;
+    decision.costEstimateUsd = estimateCostUsd(decision.callCounts);
+    decision.freePromptUsage.used = countFreeCalls(decision.callCounts);
+    decision.freePromptUsage.nearLimit =
+      decision.freePromptUsage.used >=
+      Math.floor(decision.freePromptUsage.dailyLimit * 0.8);
+    decision.timingMs.total = Date.now() - started;
+    emitEvent(ctx, {
+      type: 'run_done',
+      ts: nowIso(),
+      step: 'run_done',
+      error: message,
+      meta: {
+        status: decision.status,
+      },
+    });
     return {
       status: 'ERROR',
       exitCode: EXIT_CODES.providerConfig,
       spec: finalSpec,
       postImplementationReview: postReview || message,
       decision,
+      trace,
     };
   }
 }

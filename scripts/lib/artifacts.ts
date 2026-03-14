@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { PipelineDecision, PipelineStatus } from './pipeline.js';
+import { PipelineDecision, PipelineEvent, PipelineStatus } from './pipeline.js';
 
 export interface ArtifactWriteInput {
   outputDir: string;
@@ -10,12 +10,14 @@ export interface ArtifactWriteInput {
   spec: string;
   postImplementationReview: string;
   decision: PipelineDecision;
+  trace: PipelineEvent[];
 }
 
 export interface ArtifactWriteResult {
   dir: string;
   specPath: string;
   decisionPath: string;
+  tracePath: string;
 }
 
 function slugify(input: string): string {
@@ -50,10 +52,12 @@ function statusBanner(status: PipelineStatus): string {
       return '> [!CAUTION]\n> ESCALATION_REQUIRED: unresolved blockers remain and higher-tier review was not run.';
     case 'FAILED_EXPENSIVE':
       return '> [!CAUTION]\n> FAILED_EXPENSIVE: unresolved blockers remain after expensive tier.';
+    case 'NO_HIGH_TIER':
+      return '> [!NOTE]\n> NO_HIGH_TIER: debate high tier unavailable; result was produced from lower tiers.';
+    case 'DEGRADED_LOW':
+      return '> [!WARNING]\n> DEGRADED_LOW: low-tier critics were partially unavailable; review confidence is reduced.';
     case 'ERROR':
       return '> [!WARNING]\n> ERROR: pipeline failed. Check decision.json for details.';
-    case 'DRAFT_ONLY':
-      return '> [!NOTE]\n> DRAFT_ONLY: no critic pass was executed.';
     case 'REVIEWED':
     default:
       return '> [!TIP]\n> REVIEWED: no unresolved blocking issues were detected in the configured flow.';
@@ -75,8 +79,15 @@ function renderSpecMarkdown(input: ArtifactWriteInput): string {
   chunks.push('## Metadata');
   chunks.push('');
   chunks.push(`- Status: \`${input.status}\``);
-  chunks.push(`- Rounds used: \`${input.decision.roundsUsed}\``);
+  chunks.push(
+    `- Repeat rounds used: \`${input.decision.repeatRoundsUsed}/${input.decision.repeatRequested}\``,
+  );
   chunks.push(`- Tiers used: \`${input.decision.tiersUsed.join(', ') || 'none'}\``);
+  chunks.push(`- Cost estimate: \`$${input.decision.costEstimateUsd.toFixed(4)}\``);
+  chunks.push(
+    `- Free-tier usage: \`${input.decision.freePromptUsage.used}/${input.decision.freePromptUsage.dailyLimit}\``,
+  );
+  chunks.push(`- Convergence reason: \`${input.decision.convergenceReason}\``);
   if (input.decision.unresolvedBlocking.length > 0) {
     chunks.push(`- Unresolved blocking issues: \`${input.decision.unresolvedBlocking.length}\``);
   }
@@ -93,13 +104,17 @@ export function writeArtifacts(input: ArtifactWriteInput): ArtifactWriteResult {
 
   const specPath = path.join(runDir, 'spec.md');
   const decisionPath = path.join(runDir, 'decision.json');
+  const tracePath = path.join(runDir, 'trace.jsonl');
 
   fs.writeFileSync(specPath, renderSpecMarkdown(input), 'utf-8');
   fs.writeFileSync(decisionPath, JSON.stringify(input.decision, null, 2), 'utf-8');
+  const traceLines = input.trace.map((event) => JSON.stringify(event)).join('\n');
+  fs.writeFileSync(tracePath, traceLines ? `${traceLines}\n` : '', 'utf-8');
 
   return {
     dir: runDir,
     specPath,
     decisionPath,
+    tracePath,
   };
 }
