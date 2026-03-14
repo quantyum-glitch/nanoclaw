@@ -1,0 +1,828 @@
+0:00
+Well, hello there.
+0:01
+So today I want to talk about agentic engineering.
+0:04
+Now, this is a pretty new term that's been popping up
+0:07
+all over social media lately.
+0:09
+And I know a lot of people are going to probably say,
+0:12
+isn't this just vibe coding? And in my opinion,
+0:14
+it's totally different. There's a big difference
+0:17
+between people just prompting ChatGPT or
+0:20
+Gemini and one shouting some code that they're going
+0:22
+to copy paste and saying, hey, look, I built something.
+0:25
+And when you look at the image, it's just pointing
+0:27
+to their local host. There's a big difference between that
+0:30
+and what I do at work every single day. And don't
+0:33
+get me wrong. I think it's amazing that a lot of
+0:35
+people are actively trying to build things and they're
+0:37
+excited about AI coding and just doing things.
+0:41
+And I think that is great. But on the flip side,
+0:43
+the term like vibe coding being synonymous with.
+0:47
+AI coding, in my opinion, is essentially a disservice to
+0:50
+the entire industry. Basically, when everyone who is doing
+0:54
+AI coding is getting lumped up, all together with
+0:56
+vibe coding, I don't think that's the right approach.
+0:59
+So today we're gonna talk about what agentic
+1:01
+engineering is and what I think are the five pillars
+1:04
+that make up this new practice. Before we
+Karpathy and Peter Steinberger agree
+1:07
+dive in, I wanna give two really good examples
+1:09
+of this new term, agentic engineering. And I
+1:12
+think Andre Caparthi tweeted about this,
+1:14
+saying that what he's doing these days
+1:16
+is not so much as vibe coding,
+1:18
+but agentic engineering. And he specifically called out
+1:22
+the use of the word engineering in this,
+1:24
+because honestly, it is engineering.
+1:27
+There's so much thought and a lot of designing,
+1:30
+system designing, and just a ton of work that goes into
+1:33
+this new workflow and this new practice.
+1:36
+And another really good example is from
+1:37
+Peter Steinberger,
+1:39
+who recently joined OpenAI.
+1:40
+But I saw a podcast of him with Gergay on the
+1:43
+Pragmatic Engineer,
+1:45
+and he also described that his work is
+1:47
+agentic engineering.
+1:49
+He even goes as far as to say, vibe coding is
+1:52
+basically a slur now.
+1:54
+I think, I think vibe coding is by now almost a slur.
+1:57
+Oh yeah.
+1:57
+I call it,
+1:58
+I tell people I do, what I do is agentic engineering with a
+2:01
+little star.
+2:02
+Vibe coding starts at 3 a.m.
+2:04
+And honestly, that was so relatable to me because I've
+2:07
+definitely been there in those late nights when I'm no
+2:10
+longer following the best practices and these pillars
+2:13
+that I'm gonna talk about.
+2:14
+Now, another interesting thing about all of this like
+2:16
+agentic engineering stuff is that
+How I discovered this on my own
+2:19
+I actually discovered
+2:20
+a lot of these pillars on my own,
+2:23
+just through working with AI models every single day.
+2:26
+And it kind of started before Opus 4.5 came out.
+2:30
+But when that model came out, something like
+2:32
+really shifted in the way I started to work because the
+2:36
+models just became so capable and the tools around
+2:38
+the model just had this moment
+2:40
+where everything just clicked. And that's why
+2:42
+you see ClockCode and CodexApp and all these
+2:45
+agentic coding apps are just blowing up right now.
+2:47
+And it's so interesting to me that
+2:50
+all of these people that are actively building with these
+2:53
+things are all kind of diverging on these
+2:55
+like common
+2:57
+topics, common things that are turning out to be this
+2:59
+thing called agentic engineering. Okay,
+3:02
+that was a long-winded setup, but let's
+3:03
+get right into
+Pillar 1
+3:05
+what is agentic engineering. Pillar number one is
+3:08
+context engineering.
+3:10
+And if you've seen any of my previous ClockCode videos,
+3:13
+I think context engineering is king.
+3:15
+Context is king. Context is best served fresh
+3:18
+and condensed.
+3:20
+Now, all of these pillars are very important, but in
+3:23
+my opinion,
+3:24
+context is probably the most important thing. You know,
+3:27
+garbage in, you get garbage out, right?
+3:29
+Now, a lot of people will say,
+3:31
+hey, John,
+3:32
+just feed it everything. We have such large context
+3:34
+window these days, does it even matter? And in
+3:37
+my opinion, even with the large context window,
+3:40
+I don't think you should be trying to optimize for using
+3:42
+all of it. Because the way these models actually work is
+3:45
+that it's basically a statistical output, right?
+3:48
+It's a statistical chance that something will happen,
+3:51
+some output will be created based on the data that you
+3:53
+feed it in. So for context engineering,
+3:55
+you really need to think about what is the exact
+3:58
+right amount of context that I need to give to the
+4:01
+model so that it can do its work better.
+4:04
+Nothing more, nothing less.
+4:06
+And if you look at ClockCode and all of the inner workings
+4:10
+of it, you know, the slash commands,
+4:11
+the sub-agents, the skills, the MCPs,
+4:14
+it's honestly just a tool for context engineering
+4:17
+that happens to have a really good agentic loop and
+4:20
+a model that supports it. Now, once you buy into
+4:22
+this concept, that context engineering really matters
+4:25
+and what you put into the models really matter,
+4:28
+the next obvious thing is
+4:30
+how do you organize this? How do you organize all of
+4:33
+this like domain knowledge and context about your code
+4:35
+and about your projects so that the AI can retrieve it
+4:38
+efficiently and effectively? This is essentially the second
+4:42
+brain concept. The second brain in a nutshell is how do
+4:45
+you store context that isn't about the code itself,
+4:49
+but about the domain around the code,
+4:52
+like product, product information,
+4:54
+product specs,
+4:55
+config decisions, domain rules, everything that an engineer
+4:58
+actually keeps inside of their head, where should
+5:00
+that live
+5:01
+so that the AI can retrieve it easily? And there's many
+5:05
+ways to do this. For ClockCode, for example,
+5:07
+you can have a local version of your .cloud and you
+5:10
+could just
+5:11
+put a bunch of things in there. I do this for things
+5:13
+that may not belong in the code base directly. And the
+5:16
+other obvious way is committing it directly into
+5:19
+the code base. Recently, OpenAI ran this experiment
+5:22
+and wrote about it in this article called
+5:24
+Harness Engineering.
+5:26
+And here they were saying that they're pushing more
+5:28
+and more things into the code base for the AI to
+5:31
+have context.
+5:32
+Basically, they're optimizing the code base for the AI
+5:35
+rather than just what we deem normally acceptable
+5:38
+for humans.
+5:39
+So a really interesting insight and a rule that they
+5:42
+discovered through this experiment is that if the
+5:45
+domain knowledge doesn't exist in the code base,
+5:48
+then it doesn't exist for the agents at all.
+5:51
+So to me, that was really interesting because like I said,
+5:54
+we have so much that's just locked up right here
+5:57
+when we work with like just other people outside of the
+6:00
+code base. You know, decisions for meetings,
+6:02
+business rules,
+6:04
+some new architecture choices that we decided.
+6:06
+And when the agent doesn't inherently just know this,
+6:09
+we just complain that the agent is not working well.
+6:11
+But what if you started compacting all of this
+6:14
+domain knowledge into
+6:15
+markdown files or documentation
+6:18
+and everything that the agent needs, they can
+6:20
+retrieve it using some rag system.
+6:22
+What I've been doing with my work is really figuring
+6:25
+out like what are the key things. I need to put into
+6:27
+the code base directly so others can use it? And what
+6:30
+are the things that I want in my workflow locally?
+6:32
+So these are the things that I'm thinking about.
+6:34
+And there's smart ways to do this because over time,
+6:37
+if you really go deep on this second brain concept,
+6:40
+you'll realize that you'll have
+6:41
+a ton
+6:42
+of markdown files everywhere.
+6:43
+So like indexing things properly that points to other
+6:46
+markdown files,
+6:47
+like all of these things, the second brain concept,
+6:50
+I think is a whole field of, of engineering that is gonna
+6:53
+be a big thing. It already started with like
+6:56
+rag systems,
+6:57
+but this is just another layer on top of
+6:59
+agentic engineering.
+7:00
+Now, pillar number two is agentic validation. We just
+Pillar 2
+7:04
+discussed that context is king and context is the
+7:06
+most important,
+7:08
+but for agentic validation, it's really asking
+7:10
+the question,
+7:11
+what kind of context is good? And in my opinion,
+7:15
+a way to self validate an agent is gonna be one of the
+7:19
+most important things for the agent's output to be
+7:21
+dramatically better. Boris Chen, the creator of
+7:24
+Cloud Code, talked about this in his workflows when he
+7:27
+posted about it sometime in January.
+7:30
+So if you give an agent a way to validate his
+7:32
+own work,
+7:33
+for example, like backend tasks,
+7:35
+maybe some integration tests or unit tests, for front end,
+7:37
+like client work, it might be the agent actually just
+7:40
+navigates the Chrome browser and take screenshots
+7:43
+and validates itself, right?
+7:45
+And maybe for mobile, you can actually use the
+7:46
+ADB to simulate interactions. Whatever the validation is,
+7:50
+in my opinion, this is where a lot of
+7:53
+creative engineering will happen. And Boris
+7:55
+mentioned that having this validation is a big difference
+7:59
+between you're getting crappy output
+8:02
+versus something that actually works and
+8:03
+is validated.
+8:05
+And like I said, this is where a lot of interesting
+8:08
+creative engineering is gonna happen,
+8:10
+this agentic validation loop, right? For example,
+8:13
+validation in my opinion is very, very hard,
+8:16
+especially for
+8:17
+like UI validation. How do you know that this
+8:20
+interaction actually works?
+8:21
+We don't really have really good video models in the loop
+8:24
+yet with agent decoding,
+8:26
+but how do you do that without it?
+8:27
+Screenshots are okay, but it's not perfect. But you know,
+8:30
+you could do things like create maybe a domain
+8:32
+specific language
+8:34
+that knows how to navigate your app using like the ADB
+8:37
+simulator for mobile, for example.
+8:40
+Like there's all these things that you can think about
+8:42
+and do. And there's another layer of like logging.
+8:45
+What are the observable things that the agent can
+8:47
+see right now to help itself validate?
+8:49
+For example, in that article, OpenAI started using a
+8:52
+log QL
+8:53
+to be able to log a bunch of files during the validation
+8:56
+loop so that the agent can carry the logs and
+8:58
+validate that, oh,
+9:00
+the data is actually correct as well, rather than just
+9:03
+relying on tests. And these are the things that you
+9:04
+should be asking yourself for your own code base and
+9:07
+your own agentic loops.
+9:08
+Does the AI have enough data from its
+9:11
+validation loop? Is the visual feedback loop enough? Or is
+9:14
+there other mechanisms that you haven't thought of that
+9:16
+the agent can use to self-validate? And I think
+9:19
+agentic validation, in my opinion, is gonna be a
+9:21
+huge part of agentic engineering. Now,
+Pillar 3
+9:24
+pillar number three is around agentic tooling,
+9:26
+and this ties directly into agentic validation. But I
+9:30
+think it's a large enough subject that it should be a
+9:32
+thing of its own. In this interview,
+9:34
+Peter Steinberger talks about this topic a lot, and he
+9:37
+describes it as friction.
+9:39
+What are the things
+9:41
+that are blocking the agent? What are the friction pieces
+9:44
+in the agentic loop
+9:46
+that the agent is struggling on?
+9:48
+And we've seen this develop through many different
+9:51
+channels already, right? ChatGPT and Gemini,
+9:54
+they have search, agentic search. This is
+9:57
+probably a really good example of agentic tooling.
+10:00
+Deep research, multimodal, task systems,
+10:03
+all of the things that ChatGPT and Gemini is
+10:05
+adding into their chat interface,
+10:07
+that's something you could think about as an
+10:09
+agentic tool.
+10:11
+But you can go a layer deeper.
+10:13
+If you look at OpenClaw, which is a really good
+10:15
+example of this, a lot of OpenClaw skills,
+10:18
+they actually just point to CLI tools.
+10:20
+And Peter even mentioned that every time he ran into
+10:22
+something where the agent can't do something, he just
+10:24
+first reached to build a CLI.
+10:26
+And because he had built all these CLI tools to do a bunch
+10:29
+of these like agentic orchestrations before,
+10:32
+OpenClaw was able to be super successful because it's
+10:34
+leveraged all of these things to get work done where
+10:37
+previously the agent was not able to do. So in your
+10:40
+own workflow, these are the things that you should be
+10:43
+actively thinking about and actively building and finding
+10:46
+ways for the agent to handle. You essentially
+10:48
+need to get to a point where humans are no longer
+10:51
+the bottleneck when it comes to the
+10:53
+agentic execution.
+10:55
+Whatever is slowing down the agents,
+10:58
+recognize that that is a huge opportunity right now.
+11:01
+And should you create a CLI tool or should you like find it
+11:04
+or build a specific skill to like automate that workflow?
+11:08
+Whatever it takes, you really need to think
+11:10
+about actively pursuing to remove that friction from
+11:13
+the agent. So the next time you run into something when
+11:16
+you're coding where you have to manually change
+11:18
+something or like there is no end point, so you have to like
+11:20
+go to that website and change something.
+11:23
+Think about ways so that you can build a system or a
+11:26
+tool that the agent can use. So you don't have to
+11:28
+manually ever do that again.
+Pillar 4
+11:30
+Now, pillar number four is about agentic code bases.
+11:33
+So the question you should ask yourself right now is,
+11:36
+is your code base optimized for AI agents?
+11:39
+I would say most brownfield projects
+11:42
+aren't optimized for agents at all. You know,
+11:44
+think about your code base.
+11:46
+How much of it is dead code or bad patterns? How much
+11:49
+of competing frameworks is in your codebase?
+11:51
+Maybe you are partway through a migration that
+11:53
+never finished and now your codebase have two different
+11:56
+patterns for doing the same thing. We all know
+12:00
+that our codebases that we work at at work or
+12:02
+wherever has these kind of things
+12:04
+but right now is a moment you should be actively
+12:07
+cleaning that up. Cleaning up your codebase
+12:09
+and doing better engineering has never been more
+12:12
+important than right now because every time bad
+12:15
+context goes into your agentic loop
+12:17
+it's basically like the poisoning the agent
+12:20
+and then you might wonder why like hey why is this
+12:23
+agent doing this other thing that I don't want it to do?
+12:25
+Like I said the agents are probabilistic in nature right?
+12:29
+So if your code has weird competing patterns then you
+12:32
+need to get rid of it. You need to actively get rid
+12:35
+of it. So dead code and bad patterns is all one thing
+12:39
+but in OpenAI's article they're even going a
+12:42
+step further. They're optimizing their file
+12:44
+structure so that it's always consistent. So that
+12:47
+the AI can always generate things consistently.
+12:50
+They're even adding logging
+12:52
+that is like agent specific so that the agent can read the
+12:55
+logs and things like that. And they're creating
+12:57
+documentation not just for humans but for the agent so
+13:00
+that they can keep track of the domain knowledge.
+13:02
+Essentially they encode what they called the golden
+13:05
+principles that directly into the repo. They're very
+13:09
+opinionated about the rules and they keep things very
+13:12
+consistent for future agents to run not future humans.
+13:15
+And in my opinion, this is an area where
+13:19
+we as engineers have to really think about what are
+13:23
+good principles. You know, does dry really matter?
+13:26
+Does solid matter? Does not commenting your code in a
+13:29
+way that like really matter? There's all these things that
+13:32
+we have,
+13:34
+you know, as engineers have defined as good
+13:37
+but I think a lot of that is going to change and a lot of
+13:39
+this is still being figured out. What does an agentic
+13:42
+codebase look like in the future? Because you
+13:44
+need to remember that you're not just writing code.
+13:47
+For the next engineer anymore.
+13:49
+You're writing code for the next agent to run.
+13:52
+Now pillar number five is when all of these things
+Pillar 5
+13:54
+come together and it's called compound engineering.
+13:57
+Dan Schipper co-founder of every talked about
+14:00
+this concept. I think he essentially coined the term
+14:03
+and it's a really powerful one if you think about it.
+14:06
+Now all of the things that I've been talking about
+14:08
+context engineering, agentic validation,
+14:11
+agentic tooling, agentic
+14:12
+codebase optimizations. If you do all these things,
+14:16
+if you push everything into the codebase so that the
+14:18
+agent can like see it and share it and then you all
+14:22
+engineers working on this are bought into these concepts
+14:24
+of agentic engineering, then you have this new
+14:27
+behavior where it compounds over time,
+14:30
+you know, so the next time you optimize some workflow
+14:33
+with a new skill and then you land it or you develop a
+14:36
+new MCP because there's no good api's or tools already
+14:40
+every time you add those things and then you add it
+14:43
+into the working library your working codebase. Then this
+14:46
+compounds and that's exactly
+14:47
+compound engineering. And the reason why I
+14:49
+mentioned this as like this last point is
+14:52
+because all of these things that I just talked about you
+14:55
+really need to like internalize this and then like spread this
+14:59
+out because one of the most common things that I've seen
+15:01
+in my work is that people make workflows people do
+15:04
+things locally and then everyone kind of works
+15:07
+slightly different. Everyone has
+15:09
+different workflows.
+15:10
+That's actually a huge thing about cloud code.
+15:12
+It's very customizable, but I think in the future,
+15:15
+teams will be more like that open AI team who's
+15:18
+essentially all agreed all bought into this concept and
+15:21
+they're compounding the work the compounding the
+15:24
+knowledge compounding the tools that the agent can use
+15:27
+and over time making those agents be able to just
+15:30
+self-validate and keep going and essentially have the code
+15:33
+build itself. And in my opinion like having this
+15:36
+mindset this last final piece of compound engineering.
+15:39
+I think it's a piece that you really need to bring back to
+15:42
+your teams.
+15:43
+So that's it. Those are the five pillars. Five pillars of
+Where engineering is going
+15:45
+agentic engineering. Now, I don't have everything
+15:48
+figured out. I'm still experimenting
+15:51
+still learning by building new things every single day every
+15:54
+single week, you know, some days you'll feel like this
+15:56
+where you're building some some custom tool for the
+15:59
+agent or some custom validation for the agent and
+16:02
+it's just not working and you might have burned hours
+16:05
+and hours going in circles and going back and forth
+16:08
+and might think that hey, maybe I should just like
+16:11
+written this myself.
+16:12
+I think you should really challenge yourself to
+16:14
+try to avoid that innate reaction because you know,
+16:18
+I myself love to write code and I wrote an interesting
+16:21
+article about mourning the loss of coding,
+16:24
+but this is the future and I genuinely think that this is
+16:27
+where engineering is going to go and the gap between
+16:31
+people who are going to understand this agentic
+16:33
+engineering and the people who are just still
+16:36
+vibe coding or coding by hand. I think it's going to
+16:39
+get wider every single month month over month as sad as
+16:42
+it is to say I do. I truly believe the era of coding by
+16:47
+hand is dead.
+16:49
+It's sad, but it's true.
+16:51
+So let me know in the comments. I would love
+16:53
+to hear what your workflow is looking like.
+16:57
+If any of this resonates with you also sign up for my
+17:00
+newsletter push to prod. I write once a week or twice
+17:03
+a week and there's some content that's not here that
+17:06
+is there and if you're interested in AI coding, I have
+17:09
+these videos for you, especially this cod code one
+17:12
+that's been doing really well.
+17:13
+But yeah,
+17:14
+I hope you guys enjoy this video and until I see you on
+17:17
+the next one.

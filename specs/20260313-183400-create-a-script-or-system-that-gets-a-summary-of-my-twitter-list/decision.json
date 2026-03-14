@@ -1,0 +1,30 @@
+{
+  "status": "ERROR",
+  "mode": "debate",
+  "goal": "create a script or system that gets a summary of my twitter list and sends it to my gmail every hour",
+  "maxRounds": 2,
+  "roundsUsed": 0,
+  "tierLimit": 2,
+  "allowTier3": false,
+  "tiersUsed": [],
+  "degraded": false,
+  "unresolvedBlocking": [],
+  "structural": {
+    "hasSummary": false,
+    "hasArchitectureOrApproach": false,
+    "hasTestsOrAcceptance": false,
+    "hasRisks": false,
+    "passed": false,
+    "missing": []
+  },
+  "critics": [],
+  "notes": [
+    "Pipeline error: Missing GEMINI_API_KEY (required for draft generation)."
+  ],
+  "callCounts": {},
+  "timingMs": {
+    "total": 0,
+    "tier12": 0,
+    "tier3": 0
+  }
+}

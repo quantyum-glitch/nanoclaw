@@ -1,0 +1,38 @@
+{
+  "status": "DRAFT_ONLY",
+  "mode": "default",
+  "goal": "flag parse smoke",
+  "maxRounds": 1,
+  "roundsUsed": 0,
+  "tierLimit": 1,
+  "allowTier3": false,
+  "tiersUsed": [],
+  "degraded": false,
+  "unresolvedBlocking": [],
+  "structural": {
+    "hasSummary": true,
+    "hasArchitectureOrApproach": true,
+    "hasTestsOrAcceptance": true,
+    "hasRisks": true,
+    "passed": true,
+    "missing": []
+  },
+  "critics": [],
+  "notes": [
+    "Initial draft model: openrouter/openrouter/free"
+  ],
+  "callCounts": {
+    "openrouter:draft:openrouter/free": 1
+  },
+  "providerPolicy": {
+    "geminiEnabled": false,
+    "kimiEnabled": false,
+    "freeTierOnly": true,
+    "openRouterAvailable": true
+  },
+  "timingMs": {
+    "total": 14943,
+    "tier12": 14943,
+    "tier3": 0
+  }
+}

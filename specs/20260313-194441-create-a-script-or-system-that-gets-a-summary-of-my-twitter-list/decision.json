@@ -1,0 +1,117 @@
+{
+  "status": "UNREVIEWED",
+  "mode": "review",
+  "goal": "create a script or system that gets a summary of my twitter list and sends it to my gmail every hour",
+  "maxRounds": 2,
+  "roundsUsed": 2,
+  "tierLimit": 2,
+  "allowTier3": false,
+  "tiersUsed": [
+    1,
+    2
+  ],
+  "degraded": true,
+  "unresolvedBlocking": [
+    {
+      "id": "B1",
+      "severity": "BLOCKING",
+      "description": "The specification does not address how to handle OAuth tokens securely, which is crucial for both Twitter and Gmail API interactions. Without proper token management, the script could fail or expose sensitive information.",
+      "fix": "Implement a secure method for storing and refreshing OAuth tokens, such as using environment variables or a secure vault service. Ensure tokens are refreshed automatically before they expire."
+    }
+  ],
+  "structural": {
+    "hasSummary": false,
+    "hasArchitectureOrApproach": false,
+    "hasTestsOrAcceptance": false,
+    "hasRisks": false,
+    "passed": false,
+    "missing": [
+      "## Summary",
+      "## Architecture or ## Approach",
+      "## Test Plan or ## Acceptance Criteria",
+      "## Risks"
+    ]
+  },
+  "critics": [
+    {
+      "critic": "FreeCritic",
+      "provider": "openrouter",
+      "model": "openrouter/free",
+      "tier": 1,
+      "available": true,
+      "structured": true,
+      "timedOut": false,
+      "parse": {
+        "assessment": "BLOCKING",
+        "blockers": [
+          {
+            "id": "B1",
+            "severity": "BLOCKING",
+            "description": "The specification does not address how to handle OAuth tokens securely, which is crucial for both Twitter and Gmail API interactions. Without proper token management, the script could fail or expose sensitive information.",
+            "fix": "Implement a secure method for storing and refreshing OAuth tokens, such as using environment variables or a secure vault service. Ensure tokens are refreshed automatically before they expire."
+          }
+        ],
+        "structured": true
+      },
+      "raw": "| ID | Severity | Description | Fix |\n|:---|:---|:---|:---|\n| B1 | BLOCKING | The specification does not address how to handle OAuth tokens securely, which is crucial for both Twitter and Gmail API interactions. Without proper token management, the script could fail or expose sensitive information. | Implement a secure method for storing and refreshing OAuth tokens, such as using environment variables or a secure vault service. Ensure tokens are refreshed automatically before they expire. |\n\nASSESSMENT: BLOCKING"
+    },
+    {
+      "critic": "FreeCritic",
+      "provider": "openrouter",
+      "model": "openrouter/free",
+      "tier": 1,
+      "available": false,
+      "structured": false,
+      "timedOut": false,
+      "parse": {
+        "assessment": "UNSTRUCTURED",
+        "blockers": [],
+        "structured": false,
+        "error": "OpenRouter model openrouter/free returned empty content"
+      },
+      "raw": "",
+      "error": "OpenRouter model openrouter/free returned empty content"
+    },
+    {
+      "critic": "KimiCritic",
+      "provider": "kimi",
+      "model": "moonshot-v1-8k",
+      "tier": 2,
+      "available": false,
+      "structured": false,
+      "timedOut": false,
+      "parse": {
+        "assessment": "UNSTRUCTURED",
+        "blockers": [],
+        "structured": false,
+        "error": "HTTP 401 Unauthorized: {\"error\":{\"message\":\"Invalid Authentication\",\"type\":\"invalid_authentication_error\"}}"
+      },
+      "raw": "",
+      "error": "HTTP 401 Unauthorized: {\"error\":{\"message\":\"Invalid Authentication\",\"type\":\"invalid_authentication_error\"}}"
+    }
+  ],
+  "notes": [
+    "draft provider gemini failed: HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\nPlease retry in 47.605880858s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Learn more about Gemini API quotas\",\n            \"url\": \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\",\n        \"violations\": [\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\n            \"quotaId\": \"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n        \"retryDelay\": \"47s\"\n      }\n    ]\n  }\n}\n",
+    "draft used fallback provider openrouter/openrouter/free after prior provider failure.",
+    "Initial draft model: openrouter/openrouter/free",
+    "rewrite provider gemini failed: HTTP 429 Too Many Requests: {\n  \"error\": {\n    \"code\": 429,\n    \"message\": \"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 0, model: gemini-2.0-flash\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 0, model: gemini-2.0-flash\\nPlease retry in 38.991856056s.\",\n    \"status\": \"RESOURCE_EXHAUSTED\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.Help\",\n        \"links\": [\n          {\n            \"description\": \"Learn more about Gemini API quotas\",\n            \"url\": \"https://ai.google.dev/gemini-api/docs/rate-limits\"\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.QuotaFailure\",\n        \"violations\": [\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerDayPerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_requests\",\n            \"quotaId\": \"GenerateRequestsPerMinutePerProjectPerModel-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          },\n          {\n            \"quotaMetric\": \"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count\",\n            \"quotaId\": \"GenerateContentInputTokensPerModelPerMinute-FreeTier\",\n            \"quotaDimensions\": {\n              \"location\": \"global\",\n              \"model\": \"gemini-2.0-flash\"\n            }\n          }\n        ]\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.RetryInfo\",\n        \"retryDelay\": \"38s\"\n      }\n    ]\n  }\n}\n",
+    "rewrite used fallback provider openrouter/openrouter/free after prior provider failure.",
+    "FreeCritic unavailable: OpenRouter model openrouter/free returned empty content",
+    "Review mode fallback: running Kimi critic because primary critic was unavailable/unstructured.",
+    "KimiCritic unavailable: HTTP 401 Unauthorized: {\"error\":{\"message\":\"Invalid Authentication\",\"type\":\"invalid_authentication_error\"}}",
+    "All critics unavailable. Returning UNREVIEWED draft with warning banner."
+  ],
+  "callCounts": {
+    "gemini:draft": 1,
+    "openrouter:draft:openrouter/free": 1,
+    "openrouter:openrouter/free": 2,
+    "gemini:rewrite": 1,
+    "openrouter:rewrite:openrouter/free": 1,
+    "kimi:moonshot-v1-8k": 1
+  },
+  "timingMs": {
+    "total": 149418,
+    "tier12": 22730,
+    "tier3": 0
+  }
+}
