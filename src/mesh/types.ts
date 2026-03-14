@@ -49,4 +49,3 @@ export interface MeshEvent {
   workerId: string;
   origin: string;
 }
-

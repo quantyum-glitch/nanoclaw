@@ -67,12 +67,10 @@ export async function readGroupEntries(
     consumer,
     [{ key: stream, id: '>' }],
     { COUNT: count, BLOCK: blockMs },
-  )) as
-    | Array<{
-        name: string;
-        messages: Array<{ id: string; message: Record<string, string> }>;
-      }>
-    | null;
+  )) as Array<{
+    name: string;
+    messages: Array<{ id: string; message: Record<string, string> }>;
+  }> | null;
 
   if (!response || response.length === 0) {
     return [];

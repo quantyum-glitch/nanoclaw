@@ -5,7 +5,9 @@ import { assertTransition, canTransition } from './state-machine.js';
 describe('mesh state machine', () => {
   it('allows a valid transition', () => {
     expect(canTransition('queued', 'drafting')).toBe(true);
-    expect(() => assertTransition('ready_for_approval', 'approved')).not.toThrow();
+    expect(() =>
+      assertTransition('ready_for_approval', 'approved'),
+    ).not.toThrow();
   });
 
   it('rejects an invalid transition', () => {
@@ -15,4 +17,3 @@ describe('mesh state machine', () => {
     );
   });
 });
-

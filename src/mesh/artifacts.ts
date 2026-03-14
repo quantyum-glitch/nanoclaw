@@ -58,4 +58,3 @@ export function writeExecutionArtifacts(
   fs.writeFileSync(executionPath, JSON.stringify(result, null, 2), 'utf-8');
   return executionPath;
 }
-

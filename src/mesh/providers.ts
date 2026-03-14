@@ -64,18 +64,21 @@ async function callOpenRouter(prompt: string): Promise<string> {
   }
 
   const model = getEnv('OPENROUTER_MODEL_GENERAL') || 'openrouter/free';
-  const data = await fetchJson('https://openrouter.ai/api/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
+  const data = await fetchJson(
+    'https://openrouter.ai/api/v1/chat/completions',
+    {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+      }),
     },
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.3,
-    }),
-  });
+  );
 
   const choices = Array.isArray(data.choices)
     ? (data.choices as Array<Record<string, unknown>>)
@@ -287,4 +290,3 @@ export async function runDebate(job: MeshJob): Promise<{
   }
   return { finalSpec: lastDecision.draft, decision: lastDecision };
 }
-

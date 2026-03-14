@@ -12,19 +12,12 @@ const TRANSITIONS: Record<MeshJobStatus, Set<MeshJobStatus>> = {
   cancelled: new Set(),
 };
 
-export function canTransition(
-  from: MeshJobStatus,
-  to: MeshJobStatus,
-): boolean {
+export function canTransition(from: MeshJobStatus, to: MeshJobStatus): boolean {
   return TRANSITIONS[from]?.has(to) ?? false;
 }
 
-export function assertTransition(
-  from: MeshJobStatus,
-  to: MeshJobStatus,
-): void {
+export function assertTransition(from: MeshJobStatus, to: MeshJobStatus): void {
   if (!canTransition(from, to)) {
     throw new Error(`Invalid mesh state transition: ${from} -> ${to}`);
   }
 }
-
