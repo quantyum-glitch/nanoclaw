@@ -80,7 +80,15 @@ If instruction-only (no scripts/hooks/bin), do not force `allowed-tools`.
 After conversion, scan the full output skill directory for unresolved OpenClaw markers:
 
 ```bash
-rg -n -i "openclaw|\.openclaw|openclaw\.json|clawdhub|sessions_list|sessions_send|sessions_spawn" container/skills/<name>/
+# Prefer rg when available; fallback to grep.
+if command -v rg >/dev/null 2>&1; then
+  rg -n -i "openclaw|\.openclaw|openclaw\.json|clawdhub|sessions_list|sessions_send|sessions_spawn" \
+    container/skills/<name>/ \
+    -g "SKILL.md" -g "scripts/**" -g "hooks/**" -g "bin/**"
+else
+  grep -RInE "openclaw|\.openclaw|openclaw\.json|clawdhub|sessions_list|sessions_send|sessions_spawn" \
+    container/skills/<name>/SKILL.md container/skills/<name>/scripts container/skills/<name>/hooks container/skills/<name>/bin 2>/dev/null
+fi
 ```
 
 If matches remain:
@@ -96,7 +104,7 @@ If no matches remain, proceed.
 1. Copy converted skill to `container/skills/<skill-name>/`.
 2. Add this annotation near top of resulting `SKILL.md`:
 
-> NanoClaw Compatible: Converted from OpenClaw/ClawHub skill. Original source: `<git-url>`
+> NanoClaw Compatible: Converted from legacy ClawHub skill. Original source: `<git-url>`
 
 3. Ensure local runtime skill hygiene:
    - prefer local ignore (`.git/info/exclude`) for `container/skills/*` except `agent-browser`
