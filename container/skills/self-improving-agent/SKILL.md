@@ -1,4 +1,4 @@
-﻿---
+---
 name: self-improvement
 description: Capture errors, corrections, and recurring lessons into project-local learning logs for continuous improvement in NanoClaw sessions.
 allowed-tools:
@@ -9,7 +9,7 @@ allowed-tools:
   - Glob
 ---
 
-> NanoClaw Compatible: Converted from OpenClaw/ClawHub skill.
+> NanoClaw Compatible: Converted from legacy ClawHub skill.
 
 # Self-Improving Agent for NanoClaw
 
@@ -51,6 +51,6 @@ Promote high-value recurring lessons into project memory docs:
 
 ## Important constraints
 
-- Do not use OpenClaw-specific commands, hooks, or paths.
+- Do not use legacy platform-specific commands, hooks, or paths.
 - Do not rely on inter-session tools like `sessions_*`.
 - Keep all artifacts inside the project workspace.

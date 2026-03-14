@@ -1,9 +1,9 @@
-﻿---
+---
 name: freeride
 description: Configure and use FreeRide CLI with NanoClaw to prioritize free OpenRouter models and resilient fallbacks.
 ---
 
-> NanoClaw Compatible: Converted from OpenClaw/ClawHub skill.
+> NanoClaw Compatible: Converted from legacy ClawHub skill.
 
 # FreeRide for NanoClaw
 
@@ -43,7 +43,7 @@ freeride list -n 20
 
 ## Notes for NanoClaw
 
-- Do not run `openclaw` or `clawdhub` commands.
-- Do not edit OpenClaw config files.
+- Do not run legacy platform-specific commands.
+- Do not edit legacy platform config files.
 - Keep all model/API config in NanoClaw `.env` and runtime settings.
 - If configuration changes need to take effect, restart NanoClaw.

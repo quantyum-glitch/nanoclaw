@@ -9,6 +9,14 @@ const JID_PREFIX = 'web:';
 const MAIN_JID = 'web:main';
 const INBOUND_QUEUE = 'nanoclaw:inbound';
 const DEDUPE_PREFIX = 'nanoclaw:web:dedupe:';
+const WATCHDOG_MS = parsePositiveInt(
+  process.env.WEB_CHANNEL_TYPING_WATCHDOG_MS,
+  10000,
+);
+const REQUEST_TIMEOUT_MS = parsePositiveInt(
+  process.env.WEB_CHANNEL_REQUEST_TIMEOUT_MS,
+  25000,
+);
 
 type InboundPayload = {
   sessionId?: unknown;
@@ -18,12 +26,26 @@ type InboundPayload = {
   timestamp?: unknown;
 };
 
+type ActiveRequest = {
+  messageId: string;
+  startedAt: number;
+  watchdogTimer: ReturnType<typeof setTimeout>;
+  timeoutTimer: ReturnType<typeof setTimeout>;
+};
+
+function parsePositiveInt(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 export class WebChannel implements Channel {
   name = 'web';
   private client!: RedisClientType;
   private streamClient!: RedisClientType;
   private connected = false;
   private stopping = false;
+  private activeRequest: ActiveRequest | null = null;
 
   constructor(private opts: ChannelOpts) {}
 
@@ -103,24 +125,38 @@ export class WebChannel implements Channel {
         }
 
         const msgTimestamp = this.toIsoTimestamp(payload.timestamp);
-        this.opts.onMessage(MAIN_JID, {
-          id: `web-${messageId}`,
-          chat_jid: MAIN_JID,
-          sender: sessionId,
-          sender_name: userName,
-          content: text,
-          timestamp: msgTimestamp,
-        });
-        this.opts.onChatMetadata(
-          MAIN_JID,
-          msgTimestamp,
-          'Web Main',
-          'web',
-          false,
-        );
+        await this.beginRequestLifecycle(messageId);
+
+        try {
+          this.opts.onMessage(MAIN_JID, {
+            id: `web-${messageId}`,
+            chat_jid: MAIN_JID,
+            sender: sessionId,
+            sender_name: userName,
+            content: text,
+            timestamp: msgTimestamp,
+          });
+          this.opts.onChatMetadata(
+            MAIN_JID,
+            msgTimestamp,
+            'Web Main',
+            'web',
+            false,
+          );
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          logger.error(
+            { err, messageId },
+            'Web channel callback processing failed',
+          );
+          await this.emitRequestFailed(
+            `Request failed before processing: ${reason}`,
+          );
+        }
       } catch (err) {
         if (this.stopping) break;
         logger.error({ err }, 'Web channel poll error; retrying in 5s');
+        await this.emitRequestFailed('Request failed while polling queue');
         await this.sleep(5000);
       }
     }
@@ -132,25 +168,23 @@ export class WebChannel implements Channel {
       return;
     }
 
-    const streamKey = 'nanoclaw:outbound:main';
-    await this.streamClient.xAdd(streamKey, '*', {
-      type: 'message',
-      text,
-      timestamp: Date.now().toString(),
-    });
-    await this.streamClient.xTrim(streamKey, 'MAXLEN', 1000, {
-      strategyModifier: '~',
-    });
+    try {
+      await this.emitOutboundMessage(text);
+      await this.completeRequestLifecycle('assistant_response', true);
+    } catch (err) {
+      logger.error({ err }, 'Web channel failed to send outbound message');
+      await this.emitRequestFailed('Failed to deliver assistant response');
+      throw err;
+    }
   }
 
   async setTyping(_jid: string, isTyping: boolean): Promise<void> {
     if (!this.connected) return;
-    const streamKey = 'nanoclaw:outbound:main';
-    await this.streamClient.xAdd(streamKey, '*', {
-      type: 'typing',
-      isTyping: isTyping ? 'true' : 'false',
-      timestamp: Date.now().toString(),
-    });
+
+    await this.emitTyping(isTyping);
+    if (!isTyping) {
+      await this.completeRequestLifecycle('typing_cleared', false);
+    }
   }
 
   ownsJid(jid: string): boolean {
@@ -164,9 +198,149 @@ export class WebChannel implements Channel {
   async disconnect(): Promise<void> {
     this.stopping = true;
     this.connected = false;
+    this.clearRequestLifecycle('disconnect');
     await this.client?.disconnect().catch(() => undefined);
     await this.streamClient?.disconnect().catch(() => undefined);
     logger.info('Web channel disconnected');
+  }
+
+  private async beginRequestLifecycle(messageId: string): Promise<void> {
+    if (this.activeRequest) {
+      logger.warn(
+        {
+          previousMessageId: this.activeRequest.messageId,
+          elapsedMs: Date.now() - this.activeRequest.startedAt,
+        },
+        'Web channel replacing active request lifecycle',
+      );
+      this.clearRequestLifecycle('replaced');
+    }
+
+    const startedAt = Date.now();
+    const watchdogTimer = setTimeout(() => {
+      if (!this.activeRequest || this.activeRequest.messageId !== messageId) {
+        return;
+      }
+      logger.warn(
+        {
+          messageId,
+          elapsedMs: Date.now() - startedAt,
+          watchdogMs: WATCHDOG_MS,
+        },
+        'Web channel typing watchdog exceeded',
+      );
+    }, WATCHDOG_MS);
+
+    const timeoutTimer = setTimeout(() => {
+      void this.handleRequestTimeout(messageId);
+    }, REQUEST_TIMEOUT_MS);
+
+    this.activeRequest = {
+      messageId,
+      startedAt,
+      watchdogTimer,
+      timeoutTimer,
+    };
+
+    await this.emitTyping(true);
+  }
+
+  private async handleRequestTimeout(messageId: string): Promise<void> {
+    if (!this.activeRequest || this.activeRequest.messageId !== messageId) {
+      return;
+    }
+
+    const elapsedMs = Date.now() - this.activeRequest.startedAt;
+    logger.error(
+      {
+        messageId,
+        elapsedMs,
+        requestTimeoutMs: REQUEST_TIMEOUT_MS,
+      },
+      'Web channel request timed out',
+    );
+
+    await this.emitOutboundMessage(
+      `Request timed out after ${Math.round(elapsedMs / 1000)}s. Please retry.`,
+    );
+    await this.emitTyping(false);
+    this.clearRequestLifecycle('timeout');
+  }
+
+  private async emitRequestFailed(message: string): Promise<void> {
+    if (!this.activeRequest) return;
+
+    logger.error(
+      {
+        messageId: this.activeRequest.messageId,
+        elapsedMs: Date.now() - this.activeRequest.startedAt,
+      },
+      `Web channel request failed: ${message}`,
+    );
+
+    await this.emitOutboundMessage(message);
+    await this.emitTyping(false);
+    this.clearRequestLifecycle('failed');
+  }
+
+  private async completeRequestLifecycle(
+    reason: string,
+    emitTypingFalse: boolean,
+  ): Promise<void> {
+    if (!this.activeRequest) return;
+
+    const elapsedMs = Date.now() - this.activeRequest.startedAt;
+    this.clearRequestLifecycle(reason);
+
+    logger.info(
+      {
+        reason,
+        elapsedMs,
+      },
+      'Web channel request lifecycle completed',
+    );
+
+    if (emitTypingFalse) {
+      await this.emitTyping(false);
+    }
+  }
+
+  private clearRequestLifecycle(reason: string): void {
+    if (!this.activeRequest) return;
+    clearTimeout(this.activeRequest.watchdogTimer);
+    clearTimeout(this.activeRequest.timeoutTimer);
+    logger.debug(
+      {
+        reason,
+        messageId: this.activeRequest.messageId,
+      },
+      'Web channel lifecycle cleared',
+    );
+    this.activeRequest = null;
+  }
+
+  private async emitOutboundMessage(text: string): Promise<void> {
+    const streamKey = 'nanoclaw:outbound:main';
+    await this.streamClient.xAdd(streamKey, '*', {
+      type: 'message',
+      text,
+      timestamp: Date.now().toString(),
+    });
+    await this.streamClient.xTrim(streamKey, 'MAXLEN', 1000, {
+      strategyModifier: '~',
+    });
+  }
+
+  private async emitTyping(isTyping: boolean): Promise<void> {
+    const streamKey = 'nanoclaw:outbound:main';
+    await this.streamClient.xAdd(streamKey, '*', {
+      type: 'typing',
+      isTyping: isTyping ? 'true' : 'false',
+      timestamp: Date.now().toString(),
+    });
+    await this.streamClient.xTrim(streamKey, 'MAXLEN', 1000, {
+      strategyModifier: '~',
+    });
   }
 
   private toIsoTimestamp(raw: unknown): string {
