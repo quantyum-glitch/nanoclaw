@@ -104,11 +104,15 @@ describe('debate pipeline rewrite prompt ordering', () => {
 
 describe('debate pipeline goal normalization helpers', () => {
   it('clamps summary over word and char budget', () => {
-    const oversized = Array.from({ length: 700 }, (_, i) => `word${i}`).join(' ');
+    const oversized = Array.from({ length: 700 }, (_, i) => `word${i}`).join(
+      ' ',
+    );
     const clamped = PIPELINE_TEST_ONLY.clampGoalSummary(oversized);
     expect(clamped.truncatedAfterSummary).toBe(true);
     expect(clamped.text.length).toBeLessThanOrEqual(3000);
-    expect(clamped.text.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(500);
+    expect(
+      clamped.text.split(/\s+/).filter(Boolean).length,
+    ).toBeLessThanOrEqual(500);
   });
 });
 
@@ -202,7 +206,8 @@ describe('debate pipeline exit-code mapping', () => {
     } finally {
       if (previousKey === undefined) delete process.env.OPENROUTER_API_KEY;
       else process.env.OPENROUTER_API_KEY = previousKey;
-      if (previousLimit === undefined) delete process.env.SPEC_FREE_PROMPT_DAILY_LIMIT;
+      if (previousLimit === undefined)
+        delete process.env.SPEC_FREE_PROMPT_DAILY_LIMIT;
       else process.env.SPEC_FREE_PROMPT_DAILY_LIMIT = previousLimit;
     }
   });
