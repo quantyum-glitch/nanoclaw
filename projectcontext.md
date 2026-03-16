@@ -357,3 +357,56 @@
 ### Current constraint
 - `nanoclaw-web` repo/service is not present in this local workspace path, so web stop endpoint/button and web workbench default mapping changes were not applied here.
 
+## Update - 2026-03-16 (U56E web patch + repo consolidation + upstream merge)
+
+### nanoclaw-web (U56E runtime folder, not git-managed)
+- Patched live files on U56E under `~/projects/nanoclaw-web`:
+  - `app/components/NanoClawChat.tsx`
+  - `app/api/debate/route.ts`
+  - `app/api/debate/run-state.ts` (new)
+  - `app/api/debate/stop/route.ts` (new)
+- Applied requested defaults:
+  - mode default: `free+low`
+  - rounds default: `1`
+  - tier preset:
+    - free: drafter `gemini-cli`, critic `qwen-cli`
+    - low: drafter `kimi-cli`, critic `gemini-cli`
+- Added stop path:
+  - frontend stop button calls `POST /api/debate/stop`
+  - backend tracks active debate child process and sends `SIGINT` then `SIGKILL` fallback.
+- Rebuilt and restarted service:
+  - `npm run build` pass
+  - `systemctl --user restart nanoclaw-web`
+  - service active on port `3010`.
+
+### nanoclaw repo consolidation (Dell <-> GitHub <-> U56E)
+- Dell local committed and pushed `main` updates for debate pipeline hardening + tests.
+- U56E `~/projects/nanoclaw` fast-forwarded to match `origin/main`.
+- Merged upstream `qwibitai/main` into local `main` with conflict resolution:
+  - conflicted files: `package.json`, `package-lock.json`, `src/index.ts`
+  - resolved to preserve local runtime integrations while accepting upstream non-conflicting additions.
+- Pushed merged `main` to origin and fast-forwarded U56E again.
+- Verified commit identity:
+  - local HEAD = `b1768cf0c33c86e050da34b7aa69d4dca5221380`
+  - U56E HEAD = same
+  - `origin/main` = same.
+
+### Validation evidence (consolidation cycle)
+- Local tests:
+  - `npm run test -- src/debate-pipeline.test.ts src/remote-control.test.ts setup/service.test.ts` -> pass
+- Local build:
+  - `npm run build` -> pass (after excluding `src/debate-pipeline.test.ts` from `tsconfig` build graph)
+- U56E web:
+  - `npm run build` in `~/projects/nanoclaw-web` -> pass
+  - `systemctl --user status nanoclaw-web` -> active.
+
+### Friction Ledger Entry
+- Date: 2026-03-16
+- Task: Keep Dell/U56E/GitHub in lockstep while also shipping `nanoclaw-web` UI/API changes
+- Blocker: `nanoclaw-web` on U56E is deployed from a non-git folder; no canonical remote/history for clean multi-host sync
+- Classification: Workflow gap
+- Impact: Runtime web fixes are not automatically reproducible or auditable from GitHub history
+- Durable Fix Path: Repo change (promote `nanoclaw-web` to its own git repo with origin remote; add pull/restart deploy script)
+- Owner: jaman
+- Status: open
+
