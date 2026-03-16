@@ -29,12 +29,32 @@ export interface StructuralCheck {
   hasArchitectureOrApproach: boolean;
   hasTestsOrAcceptance: boolean;
   hasRisks: boolean;
+  containsReviewMetadata: boolean;
+  reviewMetadataMarkers: string[];
   passed: boolean;
   missing: string[];
 }
 
+export interface SanitizeResult {
+  text: string;
+  changed: boolean;
+  warning?: string;
+}
+
 const ASSESSMENT_RE = /ASSESSMENT:\s*(CLEAN|MINOR|BLOCKING)\s*$/im;
 const ASSESSMENT_LINE_RE = /ASSESSMENT:\s*([^\r\n]+)\s*$/im;
+const REVIEW_MARKER_PATTERNS: RegExp[] = [
+  /^ASSESSMENT:\s*.+$/i,
+  /^VERDICT:\s*.+$/i,
+  /^AGREEMENTS:\s*$/i,
+  /^DISAGREEMENTS:\s*$/i,
+  /^HOLES:\s*$/i,
+  /^STYLE_ONLY:\s*$/i,
+  /^MVP:\s*$/i,
+  /^PARETO:\s*$/i,
+  /^Reviewers reporting .*:\s*$/i,
+];
+const SPEC_SECTION_HEADER_RE = /^##\s+/;
 
 function normalizeCell(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -166,6 +186,8 @@ export function structuralRubric(spec: string): StructuralCheck {
     /(^|\n)##\s*test\s*plan\b/i.test(spec) ||
     /(^|\n)##\s*acceptance\s*criteria\b/i.test(spec);
   const hasRisks = /(^|\n)##\s*risks?\b/i.test(spec);
+  const reviewMetadataMarkers = detectReviewMetadataMarkers(spec);
+  const containsReviewMetadata = reviewMetadataMarkers.length > 0;
 
   const missing: string[] = [];
   if (!hasSummary) missing.push('## Summary');
@@ -174,12 +196,17 @@ export function structuralRubric(spec: string): StructuralCheck {
     missing.push('## Test Plan or ## Acceptance Criteria');
   }
   if (!hasRisks) missing.push('## Risks');
+  if (containsReviewMetadata) {
+    missing.push('Remove review metadata markers from spec output');
+  }
 
   return {
     hasSummary,
     hasArchitectureOrApproach,
     hasTestsOrAcceptance,
     hasRisks,
+    containsReviewMetadata,
+    reviewMetadataMarkers,
     passed: missing.length === 0,
     missing,
   };
@@ -206,9 +233,18 @@ export function dedupeBlockers(blockers: Blocker[]): Blocker[] {
 }
 
 function collectNarrativeItems(lines: string[]): string[] {
-  return lines
-    .map((line) => line.trim())
-    .filter(Boolean)
+  const joinedLines = lines.reduce<string[]>((acc, rawLine) => {
+    const line = rawLine.trim();
+    if (!line) return acc;
+    if (/^[-*]\s+/.test(line) || acc.length === 0) {
+      acc.push(line);
+      return acc;
+    }
+    acc[acc.length - 1] = `${acc[acc.length - 1]} ${line}`.trim();
+    return acc;
+  }, []);
+
+  return joinedLines
     .map((line) => line.replace(/^[-*]\s+/, '').trim())
     .filter(Boolean);
 }
@@ -236,5 +272,81 @@ export function parseCriticNarrative(raw: string): CriticNarrativeSections {
     styleOnly: getSectionSlice(lines, 'STYLE_ONLY'),
     mvp: getSectionSlice(lines, 'MVP'),
     pareto: getSectionSlice(lines, 'PARETO'),
+  };
+}
+
+export function sanitizeOutput(raw: string): SanitizeResult {
+  const text = raw.trim();
+  if (!text) return { text, changed: false };
+
+  const headerMatches = [
+    text.search(/(^|\n)##\s*summary\b/i),
+    text.search(/(^|\n)##\s*goal\b/i),
+  ].filter((idx) => idx >= 0);
+
+  if (headerMatches.length === 0) {
+    return { text, changed: false };
+  }
+
+  const start = Math.min(...headerMatches);
+  if (start <= 0) return { text, changed: false };
+
+  const sanitized = text.slice(start).trim();
+  return {
+    text: sanitized,
+    changed: true,
+    warning: 'Stripped model preamble before first spec header.',
+  };
+}
+
+export function detectReviewMetadataMarkers(raw: string): string[] {
+  const markers: string[] = [];
+  const lines = raw.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    for (const pattern of REVIEW_MARKER_PATTERNS) {
+      if (pattern.test(trimmed)) {
+        markers.push(trimmed);
+        break;
+      }
+    }
+  }
+  return [...new Set(markers)];
+}
+
+export function stripReviewMetadataSections(raw: string): {
+  text: string;
+  removedMarkers: string[];
+} {
+  const lines = raw.split(/\r?\n/);
+  const kept: string[] = [];
+  const removedMarkers: string[] = [];
+  let droppingSection = false;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const marker = REVIEW_MARKER_PATTERNS.find((pattern) => pattern.test(trimmed));
+
+    if (marker) {
+      droppingSection = true;
+      removedMarkers.push(trimmed);
+      continue;
+    }
+
+    if (droppingSection) {
+      if (SPEC_SECTION_HEADER_RE.test(trimmed)) {
+        droppingSection = false;
+        kept.push(line);
+      }
+      continue;
+    }
+
+    kept.push(line);
+  }
+
+  return {
+    text: kept.join('\n').trim(),
+    removedMarkers: [...new Set(removedMarkers)],
   };
 }

@@ -117,27 +117,32 @@
   - selected free models and provider availability recorded in `decision.providerPolicy`.
 
 ### Web Channel Debate Workbench (U56E `~/projects/nanoclaw-web`)
-- Added authenticated debate endpoint:
-  - `POST /api/debate`
-  - session cookie required (same web auth model).
-- Added full web UI workbench:
-  - mode radios (`default`, `review`, `debate`, `yolo`)
-  - agent checkboxes (`Gemini CLI`, `Qwen CLI`, `Kimi CLI`)
-  - per-agent benchmark row (cost/speed/critique/reliability)
-  - single overall benchmark score
-  - prompt input box
-  - step-by-step run cards with:
-    - exact prompt sent
-    - per-model output/error
-    - timing
-  - separate final boxes:
-    - convergence
-    - disagreements/holes
-    - final result/spec
-  - copy button for final result.
-- Service notes:
-  - `nanoclaw-web` rebuilt successfully
-  - restart required killing one orphan `next-server` process before clean start.
+- Reality check (2026-03-14 PM): live web UI is still on legacy mode set:
+  - `default`, `review`, `debate`, `yolo`
+  - "Prompt Options + Debate Workbench" header still present
+  - source of truth confirmed on U56E at:
+    - `~/projects/nanoclaw-web/app/components/NanoClawChat.tsx`
+    - `~/projects/nanoclaw-web/app/api/debate/route.ts`
+    - `~/projects/nanoclaw-web/app/api/send/route.ts`
+- Requested replacement (`free`, `free+low`, `debate`) is NOT deployed yet in live `nanoclaw-web`.
+
+### Miscommunication Root Cause (Postmortem)
+- Target ambiguity: work happened in NanoClaw core repo and scripts, while the visible UI is served by a separate repo/service (`nanoclaw-web`) on U56E.
+- Completion claimed without live acceptance proof: no required check against the actual rendered page text on `http://<u56e>:3010`.
+- Context drift: this file recorded features as completed before validating the running service reflected those changes.
+- Pipeline/UI disconnect: `scripts/debate.ts` mode changes in this repo do not automatically update `nanoclaw-web` mode labels or controls.
+
+### Anti-Pitfall Protocol (Mandatory for UI Requests)
+1. Target map first:
+   - identify exact repo + file + service process that renders user-visible change.
+2. Implement only in mapped target:
+   - UI text/control changes must be in `nanoclaw-web`, not just NanoClaw core.
+3. Deploy + verify:
+   - rebuild/restart target service, then confirm by grep + browser check of exact strings.
+4. Evidence before "done":
+   - record command outputs proving old string removed and new string present.
+5. Update context last:
+   - mark complete in `projectcontext.md` only after live endpoint verification.
 
 ### Prompt Contracts Used in Debate
 - Draft prompt asks for fixed implementation sections:
@@ -159,9 +164,196 @@
   - until set, Qwen failures appear as step-level error cards in UI.
 
 ## Current Priorities
-1. Configure `QWEN_CLI_AUTH_TYPE` so Qwen joins web debate runs reliably.
-2. Add explicit role pinning in web debate UI (choose drafter vs critic agents directly).
-3. Add hard blocker gate policy in web output (pass/fail with unresolved blocker count).
+1. Validate in browser that deployed web channel shows only `free`, `free+low`, `free+low+high`.
+2. Validate "Intermediate Model Responses" panel rendering on a live run.
+3. Configure `QWEN_CLI_AUTH_TYPE` so Qwen joins web debate runs reliably.
 4. Continue keeping import-clawhub conversions aligned with local-skill upstream conventions.
 5. Optical bay HDD rescue/mount still pending.
+
+## Hotfix - 2026-03-14 (Live Web Channel)
+- Patched live U56E `nanoclaw-web`:
+  - `app/components/NanoClawChat.tsx`
+  - `app/api/debate/route.ts`
+  - `app/api/send/route.ts`
+- Mode set replaced in UI/API:
+  - from: `default`, `review`, `debate`, `yolo`
+  - to: `free`, `free+low`, `free+low+high`
+- Workbench layout updated:
+  - middle section now explicitly shows all intermediate per-step model responses
+  - bottom section is final result with copy button
+- Service rebuilt and restarted; `nanoclaw-web` currently `active`.
+
+## Thermal Diagnostics - 2026-03-14 (U56E)
+- Trigger: user reported sustained ~70C vs ~45C three days earlier.
+- Live verification from CLI during investigation:
+  - `sensors` showed package temps mostly ~53-60C (not sustained 70C during sampling).
+  - 2-minute repeated `/sys/class/thermal/thermal_zone*/temp` sampling stayed mostly:
+    - `acpitz`: ~50-56C
+    - `x86_pkg_temp`: ~54-62C (brief startup peak).
+  - Load remained low (typically ~0.05-0.55).
+- Process/service findings:
+  - User services `nanoclaw` + `nanoclaw-web` are running normally.
+  - Stopping these services temporarily did not materially lower thermal readings.
+  - Main steady-state CPU users are low-percent system daemons (`valkey`, `immich`, `pihole`, `tailscaled`).
+- Historical telemetry (`sar`) findings:
+  - Host is mostly idle (>95% idle most windows) with occasional short CPU bursts (likely scheduled maintenance).
+  - `apt-daily` / `apt-daily-upgrade` show periodic CPU bursts in journal history.
+- Thermal control stack findings:
+  - `thermald` is active but logs repeated sensor/zone limitations (`No temp sysfs`, `No Zones present Need to configure manually` in some boots).
+  - This may contribute to inconsistent thermal behavior on this older ASUS platform.
+- Constraint:
+  - Effective mitigation (CPU governor/turbo caps, thermald config, root service tuning) requires `sudo`; current non-interactive session does not have root privileges.
+
+### Friction Ledger Entry
+- Date: 2026-03-14
+- Task: Reduce sustained U56E thermals back toward ~45C baseline
+- Blocker: Root-only thermal controls unavailable in non-interactive automation session
+- Classification: Workflow gap
+- Impact: Cannot apply durable thermal caps/config without user-mediated privilege escalation
+- Durable Fix Path: Repo change + runbook (document a one-shot root hardening script and execution checklist)
+- Owner: jaman
+- Status: closed
+
+### Remediation Applied (2026-03-14, root-level)
+- Added persistent thermal cap unit:
+  - `/etc/systemd/system/u56e-cooldown.service`
+  - enabled and active (`systemctl is-enabled/is-active`: `enabled` / `active`)
+- Service actions on boot:
+  - `cpupower frequency-set -g powersave`
+  - `cpupower frequency-set -u 1.20GHz`
+  - `echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo`
+- Verification:
+  - `no_turbo=1` confirmed
+  - policy shows max frequency capped at `1.20GHz`
+  - user services remain healthy: `nanoclaw` and `nanoclaw-web` both `active`
+  - post-change thermal sampling remained mostly in ~`50-56C` band during low-to-moderate load
+- Interpretation:
+  - peak behavior improved/stabilized, but not a full return to ~45C baseline
+  - likely remaining contributors: ambient conditions, firmware/ACPI sensor quirks on this platform, and non-user service background activity
+
+## Update - 2026-03-16 (Debate Pipeline v4 execution)
+
+### Scope completed in this repo
+- Implemented v4 hardening in:
+  - `scripts/lib/pipeline.ts`
+  - `scripts/debate.ts`
+  - `scripts/lib/artifacts.ts`
+  - provider/rubric support files already aligned (`scripts/lib/providers.ts`, `scripts/lib/rubric.ts`)
+
+### Key behavior now in place
+- Retry progress is stable across retries:
+  - retries increment `attempt` metadata only
+  - logical `stepIndex/expectedSteps` do not advance per retry
+- Added round-boundary free quota gate:
+  - new status `QUOTA_EXHAUSTED`
+  - fails before starting the next round and preserves prior-best output
+- Added pre-critic size compaction path:
+  - oversized drafts are compacted before critic prompt fan-out
+- Added caller-level fast skip for repair/compact:
+  - if structural rubric passes and spec is in budget, repair flow is skipped
+- Added repair temperature control:
+  - config/env `SPEC_REPAIR_TEMPERATURE` (default `0.1`)
+  - repair/compact calls use repair temperature, not draft temperature
+- Added `userNotes` plumbing:
+  - `PipelineInput.userNotes?: string`
+  - CLI flags `--user-notes`, `--user-notes-file`
+  - prompt ordering standardized (constraints -> goal -> user notes -> memory -> instructions -> spec)
+- High-tier critics are parallelized:
+  - Codex + Claude run with `Promise.allSettled`
+  - rejected fan-out entries are recorded in `decision.notes`
+- Resume/history/status wiring confirmed:
+  - `--resume` + checkpoint JSON path writing
+  - `--keep-history` writes `spec-history.jsonl` + cleanup
+  - artifact banner includes `QUOTA_EXHAUSTED`
+
+### Validation evidence (2026-03-16)
+- Typecheck:
+  - `npx tsc --noEmit --pretty false --target ES2022 --module NodeNext --moduleResolution NodeNext scripts/lib/providers.ts scripts/lib/rubric.ts scripts/lib/pipeline.ts scripts/debate.ts scripts/lib/artifacts.ts` -> pass
+- CLI contract:
+  - `npm run -s debate -- --help` -> includes `--user-notes`, `--user-notes-file`, updated exit-code semantics
+- Runtime smoke:
+  - quota smoke (`SPEC_FREE_PROMPT_DAILY_LIMIT=0`) -> `QUOTA_EXHAUSTED` before round start
+  - resume smoke (`--resume ...`) -> `NO_HIGH_TIER` with `resumeFrom: high` + checkpoint path
+  - stream JSON events show stable retry progress (`attempt` increments while `stepIndex` remains constant)
+- Full test suite:
+  - `npm test` currently fails 2 unrelated existing tests:
+    - `setup/platform.test.ts` (`commandExists('node')` assertion)
+    - `src/channels/web.test.ts` (`xTrim` signature expectation drift)
+
+## Update - 2026-03-16 (Debate Pipeline v4.1)
+
+### Scope completed
+- `scripts/lib/pipeline.ts`
+  - dedicated CLI exit-code mapping for `QUOTA_EXHAUSTED` (`14`)
+  - free-call projection updated from fixed `3` to mode/provider-aware baseline:
+    - `free`: `2`
+    - `free+low`/`debate`: `2` (+`1` conservative fallback only when low-tier critics are unavailable)
+    - `resume`: `0`
+  - free-call counting now strictly matches `openrouter:<model ending in :free>`
+  - low-tier rewrite target resolved once and reused for rewrite + repair/compact
+  - high-tier `Promise.allSettled` rejection handling now materializes unavailable critics with error metadata
+  - if no high-tier critics are available, high-tier rewrite is skipped and low-tier checkpoint result is returned
+  - rewrite prompt ordering updated: critique feedback appears before current spec
+  - added `PIPELINE_TEST_ONLY` export for pure helper tests
+- `scripts/debate.ts`
+  - help text now shows dedicated quota exit code
+  - history write/cleanup wrapped in try/catch to avoid fatal run termination on history I/O failures
+- `src/debate-pipeline.test.ts`
+  - added focused tests for:
+    - free-call estimation
+    - strict free-call counting
+    - rewrite prompt ordering
+    - `QUOTA_EXHAUSTED` exit code mapping
+
+### Validation evidence (v4.1)
+- Targeted tests:
+  - `npx vitest run src/debate-pipeline.test.ts` -> pass (6 tests)
+- Typecheck:
+  - `npx tsc --noEmit --pretty false --target ES2022 --module NodeNext --moduleResolution NodeNext scripts/lib/providers.ts scripts/lib/rubric.ts scripts/lib/pipeline.ts scripts/debate.ts scripts/lib/artifacts.ts src/debate-pipeline.test.ts` -> pass
+- Runtime smoke:
+  - forced high-tier critic failures in resume-mode debate -> status `NO_HIGH_TIER`
+  - `decision.notes` confirms: `High-tier critics unavailable; skipping high-tier rewrite...`
+- Full suite remains with 2 pre-existing unrelated failures:
+  - `setup/platform.test.ts` (`commandExists('node')`)
+  - `src/channels/web.test.ts` (`xTrim` signature expectation drift)
+
+## Update - 2026-03-16 (Debate Pipeline v4.2 core)
+
+### Scope completed in this repo
+- `scripts/lib/pipeline.ts`
+  - added goal normalization gate for oversized goals (`>3000 chars`) with one free-route summarization call
+  - added hard post-summary clamp (`<=500 words`, `<=3000 chars`)
+  - normalized goal now used throughout draft/critic/rewrite/repair flows; raw goal no longer propagates through all prompts
+  - added `STOPPED` status and cooperative abort checks (round boundaries, step dispatch, retry iterations)
+  - added dedicated stop exit code mapping (`130`)
+  - added contamination tracking in decision (`containsReviewMetadata`, `reviewMetadataMarkers`)
+  - hardened rewrite prompt against critique bleed-through
+  - sanitizer now strips section-header review metadata blocks after model outputs
+- `scripts/lib/rubric.ts`
+  - structural rubric now detects review metadata markers and fails contamination cases
+  - added `stripReviewMetadataSections` and `detectReviewMetadataMarkers` helpers with header-style matching only
+- `scripts/lib/artifacts.ts`
+  - added `STOPPED` status banner
+- `scripts/debate.ts`
+  - CLI default mode set to `free+low`
+  - help text includes `STOPPED` exit code (`130`)
+  - artifact title/slug now uses normalized goal (`result.decision.goal`)
+- `src/debate-pipeline.test.ts`
+  - expanded coverage for v4.2:
+    - goal summary clamp behavior
+    - contamination stripping/detection behavior
+    - stopped status + exit code
+
+### Validation evidence (v4.2 core)
+- Targeted tests:
+  - `npx vitest run src/debate-pipeline.test.ts` -> pass (11 tests)
+- Typecheck:
+  - `npx tsc --noEmit --pretty false --target ES2022 --module NodeNext --moduleResolution NodeNext scripts/lib/pipeline.ts scripts/lib/rubric.ts scripts/debate.ts scripts/lib/artifacts.ts src/debate-pipeline.test.ts` -> pass
+- Full suite:
+  - `npm test` unchanged failure profile (2 pre-existing unrelated failures):
+    - `setup/platform.test.ts` (`commandExists('node')`)
+    - `src/channels/web.test.ts` (`xTrim` signature expectation drift)
+
+### Current constraint
+- `nanoclaw-web` repo/service is not present in this local workspace path, so web stop endpoint/button and web workbench default mapping changes were not applied here.
 

@@ -48,6 +48,8 @@ function statusBanner(status: PipelineStatus): string {
       return '> [!WARNING]\n> UNREVIEWED: critics were unavailable or timed out. Human review required.';
     case 'FAILED_BLOCKER':
       return '> [!CAUTION]\n> FAILED_BLOCKER: unresolved BLOCKING issues remain. Do not implement without refactor.';
+    case 'FAILED_RUBRIC':
+      return '> [!CAUTION]\n> FAILED_RUBRIC: required sections are missing after repair attempts.';
     case 'ESCALATION_REQUIRED':
       return '> [!CAUTION]\n> ESCALATION_REQUIRED: unresolved blockers remain and higher-tier review was not run.';
     case 'FAILED_EXPENSIVE':
@@ -56,8 +58,14 @@ function statusBanner(status: PipelineStatus): string {
       return '> [!NOTE]\n> NO_HIGH_TIER: debate high tier unavailable; result was produced from lower tiers.';
     case 'DEGRADED_LOW':
       return '> [!WARNING]\n> DEGRADED_LOW: low-tier critics were partially unavailable; review confidence is reduced.';
+    case 'QUOTA_EXHAUSTED':
+      return '> [!WARNING]\n> QUOTA_EXHAUSTED: free-tier prompt budget reached before starting the next round.';
+    case 'STOPPED':
+      return '> [!WARNING]\n> STOPPED: run was stopped by caller before completion.';
     case 'ERROR':
       return '> [!WARNING]\n> ERROR: pipeline failed. Check decision.json for details.';
+    case 'REVIEWED_WITH_MINORS':
+      return '> [!TIP]\n> REVIEWED_WITH_MINORS: no blocking issues, but minor findings remain.';
     case 'REVIEWED':
     default:
       return '> [!TIP]\n> REVIEWED: no unresolved blocking issues were detected in the configured flow.';

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
 
@@ -8,12 +9,15 @@ import {
   EXIT_CODES,
   PipelineEvent,
   PipelineInput,
+  PipelineResumeCheckpoint,
   PipelineStatus,
   runPipeline,
 } from './lib/pipeline.js';
 
 interface CliArgs {
   goal: string;
+  userNotes?: string;
+  userNotesFile?: string;
   mode: DebateMode;
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
@@ -24,6 +28,8 @@ interface CliArgs {
   freeTierOnly: boolean;
   freeModel?: string;
   streamJsonEvents: boolean;
+  resumePath?: string;
+  keepHistory: boolean;
 }
 
 function printHelp(): void {
@@ -33,7 +39,7 @@ function printHelp(): void {
       '  node scripts/debate.ts --goal "<text>" [options]',
       '',
       'Options:',
-      '  --mode <free|free+low|debate>         Mode (default: free)',
+      '  --mode <free|free+low|debate>         Mode (default: free+low)',
       '  --repeat <1..10>                      Repeat rounds (default: 1)',
       '  --tier-limit <1|2|3>                  Max tier (default: 2)',
       '  --allow-tier-3                        Allow high-cost high tier in debate mode',
@@ -41,6 +47,10 @@ function printHelp(): void {
       '  --with-kimi | --no-kimi               Enable/disable Kimi provider (default: enabled)',
       '  --free-tier-only                      Force free route only (disables low/high tiers)',
       '  --free-model <model-id>               Override free OpenRouter drafter model',
+      '  --resume <checkpoint.json>            Resume debate from high tier checkpoint',
+      '  --keep-history                        Write spec-history.jsonl and cleanup >7 days',
+      '  --user-notes "<text>"                Optional user notes/context for prompt generation',
+      '  --user-notes-file <path>             Load user notes from file',
       '  --output-dir <path>                   Artifact root (default: ./specs)',
       '  --stream-json-events                  Emit step events as JSON lines (SSE bridge friendly)',
       '  --help                                Show help',
@@ -50,13 +60,15 @@ function printHelp(): void {
       `  ${EXIT_CODES.failedBlocker}  FAILED_BLOCKER`,
       `  ${EXIT_CODES.escalationRequired}  ESCALATION_REQUIRED/NO_HIGH_TIER`,
       `  ${EXIT_CODES.failedExpensive}  FAILED_EXPENSIVE`,
+      `  ${EXIT_CODES.quotaExhausted}  QUOTA_EXHAUSTED`,
+      `  ${EXIT_CODES.stopped}  STOPPED`,
       `  ${EXIT_CODES.providerConfig}  provider/config error`,
     ].join('\n'),
   );
 }
 
 function parseMode(raw: string | undefined): DebateMode {
-  if (!raw) return 'free';
+  if (!raw) return 'free+low';
   const mode = raw.toLowerCase();
   if (mode === 'free' || mode === 'free+low' || mode === 'debate') return mode;
   throw new Error(`Invalid --mode value: ${raw}`);
@@ -90,6 +102,10 @@ function parseArgs(argv: string[]): CliArgs {
   let freeTierOnly = false;
   let freeModel: string | undefined;
   let streamJsonEvents = false;
+  let resumePath: string | undefined;
+  let keepHistory = false;
+  let userNotes: string | undefined;
+  let userNotesFile: string | undefined;
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -125,6 +141,10 @@ function parseArgs(argv: string[]): CliArgs {
       streamJsonEvents = true;
       continue;
     }
+    if (arg === '--keep-history') {
+      keepHistory = true;
+      continue;
+    }
     const next = argv[i + 1];
     if (!next) throw new Error(`Missing value for ${arg}`);
     switch (arg) {
@@ -152,12 +172,24 @@ function parseArgs(argv: string[]): CliArgs {
         freeModel = next.trim();
         i += 1;
         break;
+      case '--resume':
+        resumePath = next.trim();
+        i += 1;
+        break;
+      case '--user-notes':
+        userNotes = next;
+        i += 1;
+        break;
+      case '--user-notes-file':
+        userNotesFile = next;
+        i += 1;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
   }
 
-  if (!goal) throw new Error('Missing required --goal "<text>"');
+  if (!goal && !resumePath) throw new Error('Missing required --goal "<text>"');
   if (freeTierOnly) {
     enableGemini = false;
     enableKimi = false;
@@ -175,6 +207,10 @@ function parseArgs(argv: string[]): CliArgs {
     freeTierOnly,
     freeModel,
     streamJsonEvents,
+    resumePath,
+    keepHistory,
+    userNotes,
+    userNotesFile,
   };
 }
 
@@ -230,12 +266,52 @@ function loadDebateEnv(): void {
     'ANTHROPIC_MODEL_OPUS',
     'SPEC_CODEX_MODEL',
     'SPEC_ARTIFACT_ROOT',
+    'SPEC_REPAIR_TEMPERATURE',
   ];
   loadEnvFileIntoProcess(keys);
 }
 
 function printEventAsJson(event: PipelineEvent): void {
   process.stdout.write(`${JSON.stringify(event)}\n`);
+}
+
+function loadResumeCheckpoint(resumePath: string): PipelineResumeCheckpoint {
+  const raw = fs.readFileSync(resumePath, 'utf-8');
+  const parsed = JSON.parse(raw) as PipelineResumeCheckpoint;
+  if (!parsed?.spec || !parsed?.goal || !parsed?.structural || !parsed?.postSections) {
+    throw new Error(`Invalid checkpoint file: ${resumePath}`);
+  }
+  return parsed;
+}
+
+function writeSpecHistory(
+  runDir: string,
+  history: Array<{
+    round: number;
+    mode: string;
+    spec: string;
+    blockers: number;
+    structuralPassed: boolean;
+  }>,
+): void {
+  const historyPath = path.join(runDir, 'spec-history.jsonl');
+  const lines = history.map((item) => JSON.stringify(item)).join('\n');
+  fs.writeFileSync(historyPath, lines ? `${lines}\n` : '', 'utf-8');
+}
+
+function cleanupOldHistory(rootDir: string): void {
+  const cutoffMs = 7 * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  if (!fs.existsSync(rootDir)) return;
+  const dirs = fs.readdirSync(rootDir, { withFileTypes: true }).filter((d) => d.isDirectory());
+  for (const entry of dirs) {
+    const historyPath = path.join(rootDir, entry.name, 'spec-history.jsonl');
+    if (!fs.existsSync(historyPath)) continue;
+    const stat = fs.statSync(historyPath);
+    if (now - stat.mtimeMs > cutoffMs) {
+      fs.rmSync(historyPath, { force: true });
+    }
+  }
 }
 
 async function main(): Promise<void> {
@@ -256,15 +332,35 @@ async function main(): Promise<void> {
       process.env.OPENROUTER_FREE_CRITIC_MODEL || args.freeModel;
   }
 
+  if (args.userNotesFile) {
+    const notesFromFile = fs.readFileSync(args.userNotesFile, 'utf-8').trim();
+    if (notesFromFile) {
+      args.userNotes = args.userNotes
+        ? `${args.userNotes.trim()}\n\n${notesFromFile}`
+        : notesFromFile;
+    }
+  }
+
+  let resumeCheckpoint: PipelineResumeCheckpoint | undefined;
+  if (args.resumePath) {
+    resumeCheckpoint = loadResumeCheckpoint(args.resumePath);
+    if (!args.goal) {
+      args.goal = resumeCheckpoint.goal;
+    }
+  }
+
   const pipelineInput: PipelineInput = {
     goal: args.goal,
     mode: args.mode,
+    userNotes: args.userNotes,
     tierLimit: args.tierLimit,
     allowTier3: args.allowTier3,
     repeat: args.repeat,
     enableGemini: args.enableGemini,
     enableKimi: args.enableKimi,
     freeTierOnly: args.freeTierOnly,
+    resumeCheckpoint,
+    keepHistory: args.keepHistory,
     onEvent: args.streamJsonEvents ? printEventAsJson : undefined,
   };
 
@@ -275,13 +371,38 @@ async function main(): Promise<void> {
   const result = await runPipeline(pipelineInput);
   const artifacts = writeArtifacts({
     outputDir: args.outputDir,
-    goal: args.goal,
+    goal: result.decision.goal,
     status: result.status,
     spec: result.spec,
     postImplementationReview: result.postImplementationReview,
     decision: result.decision,
     trace: result.trace,
   });
+
+  if (result.resumeCheckpoint) {
+    const checkpointPath = path.join(artifacts.dir, 'checkpoint-high.json');
+    fs.writeFileSync(
+      checkpointPath,
+      JSON.stringify(result.resumeCheckpoint, null, 2),
+      'utf-8',
+    );
+    result.decision.checkpointPath = checkpointPath;
+    fs.writeFileSync(
+      artifacts.decisionPath,
+      JSON.stringify(result.decision, null, 2),
+      'utf-8',
+    );
+  }
+  if (args.keepHistory) {
+    try {
+      writeSpecHistory(artifacts.dir, result.specHistory);
+      cleanupOldHistory(args.outputDir);
+    } catch (err) {
+      console.error(
+        `History warning: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
 
   printSummary(result.status, artifacts.dir, artifacts.specPath, artifacts.tracePath);
   printSpecToTerminal(result.spec, result.postImplementationReview);
