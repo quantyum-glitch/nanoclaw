@@ -94,8 +94,7 @@ const LIMITS = {
   freeRoundBudgetMs: 3 * 60_000,
   freeLowRoundBudgetMs: 5 * 60_000,
   debateRoundBudgetMs: 10 * 60_000,
-  repairAttempts: 2,
-  compactAttempts: 1,
+  repairAttempts: 1,
   goalMaxChars: 3000,
   goalSummaryMaxWords: 500,
 } as const;
@@ -555,6 +554,14 @@ function buildDraftPrompt(
   memoryBlock?: string,
 ): string {
   const sharedContext = buildPromptSharedContext(goal, userNotes, memoryBlock);
+  const sectionRules = [
+    'Required sections and content rules:',
+    '- ## Summary: 2-3 sentence overview. Prose allowed.',
+    '- ## Architecture: design rationale, tradeoffs, and decisions. Prose allowed for WHY.',
+    '- ## Implementation Changes: concrete file paths, algorithm/code steps, config changes. Use numbered steps/bullets/code blocks; avoid narrative prose paragraphs.',
+    '- ## Test Plan: concrete test cases with expected outcomes.',
+    '- ## Risks: risk/mitigation pairs. Prose allowed.',
+  ];
   if (priorSpec?.trim()) {
     return [
       'Return ONLY final markdown.',
@@ -569,6 +576,8 @@ function buildDraftPrompt(
       '- Preserve actionable content and tighten ambiguous steps.',
       '- Optimize for MVP and Pareto outcomes first.',
       '- Keep style changes minimal unless they remove confusion.',
+      `- Target output length under ${LIMITS.draftTokens} tokens.`,
+      '- If too long, convert prose to bullets and remove redundancy. Do not omit required sections.',
       '',
       'Return markdown with required sections:',
       '(only these sections, in this order, with no additional top-level sections)',
@@ -577,6 +586,8 @@ function buildDraftPrompt(
       '## Implementation Changes',
       '## Test Plan',
       '## Risks',
+      '',
+      ...sectionRules,
       '',
       'Existing spec:',
       priorSpec,
@@ -596,6 +607,8 @@ function buildDraftPrompt(
     '- Optimize for MVP and Pareto outcomes first.',
     '- Focus on concrete, testable implementation steps.',
     '- Include edge cases and failure modes.',
+    `- Target output length under ${LIMITS.draftTokens} tokens.`,
+    '- If too long, convert prose to bullets and remove redundancy. Do not omit required sections.',
     '',
     'Return markdown with these required sections:',
     '(only these sections, in this order, with no additional top-level sections)',
@@ -604,10 +617,12 @@ function buildDraftPrompt(
     '## Implementation Changes',
     '## Test Plan',
     '## Risks',
+    '',
+    ...sectionRules,
   ].join('\n');
 }
 
-function buildCriticPrompt(goal: string, spec: string, focus: string): string {
+function buildCriticPrompt(goal: string, spec: string): string {
   return [
     'Review this implementation spec.',
     'You are an isolated architectural reviewer with NO filesystem/tool access.',
@@ -627,7 +642,7 @@ function buildCriticPrompt(goal: string, spec: string, focus: string): string {
     'MVP:',
     'PARETO:',
     '',
-    `Focus: ${focus}`,
+    'Evaluate for: correctness, security, reliability, architecture holes, missing edge cases, optimization opportunities, and Pareto improvements.',
     `Goal: ${goal}`,
     '',
     'Rules:',
@@ -666,6 +681,8 @@ function buildRewritePrompt(
     '- Output only the revised implementation spec.',
     '- Do not include reviewer verdicts/metadata or review process commentary.',
     '- Do not echo critique text verbatim.',
+    `- Target output length under ${LIMITS.draftTokens} tokens.`,
+    '- If too long, convert prose to bullets and remove redundancy. Do not omit required sections.',
     '',
     'Critique feedback:',
     feedback,
@@ -680,6 +697,13 @@ function buildRewritePrompt(
     '## Implementation Changes',
     '## Test Plan',
     '## Risks',
+    '',
+    'Required sections and content rules:',
+    '- ## Summary: 2-3 sentence overview. Prose allowed.',
+    '- ## Architecture: design rationale, tradeoffs, and decisions. Prose allowed for WHY.',
+    '- ## Implementation Changes: concrete file paths, algorithm/code steps, config changes. Use numbered steps/bullets/code blocks; avoid narrative prose paragraphs.',
+    '- ## Test Plan: concrete test cases with expected outcomes.',
+    '- ## Risks: risk/mitigation pairs. Prose allowed.',
   ].join('\n');
 }
 
@@ -710,36 +734,6 @@ function buildRepairPrompt(
     '## Implementation Changes',
     '## Test Plan',
     '## Risks',
-    '',
-    'Current spec:',
-    currentSpec,
-  ].join('\n');
-}
-
-function buildCompactPrompt(
-  goal: string,
-  userNotes: string | undefined,
-  currentSpec: string,
-  budgetTokens: number,
-  tierLabel: 'free' | 'low' | 'high',
-  memoryBlock?: string,
-): string {
-  const sharedContext = buildPromptSharedContext(goal, userNotes, memoryBlock);
-  return [
-    'Return ONLY final markdown.',
-    'Start directly with `## Summary`.',
-    'Output the FULL document; never return diffs, placeholders, or partial sections.',
-    '',
-    ...sharedContext,
-    '',
-    `Tier: ${tierLabel.toUpperCase()}`,
-    `Target under ${budgetTokens} tokens.`,
-    '',
-    'Compaction rules:',
-    '- Convert prose to bullets.',
-    '- Remove redundancy.',
-    '- Preserve all required sections and code blocks.',
-    '- Keep only required sections (no additional top-level sections).',
     '',
     'Current spec:',
     currentSpec,
@@ -1184,39 +1178,21 @@ function resolveLowRewriteTarget(
   return fallbackTarget;
 }
 
-async function compactSpecBeforeCriticIfNeeded(
+function noteSpecOverCriticBudget(
   ctx: StepContext,
   config: {
     round: number;
-    goal: string;
-    userNotes?: string;
-    memoryBlock?: string;
     spec: string;
     tierLabel: 'free' | 'low' | 'high';
-    rewriteCall: (prompt: string, step: string, temperature: number) => Promise<ProviderResult>;
   },
-): Promise<string> {
+) {
   if (estimateTokens(config.spec) <= LIMITS.critiqueSpecTokens) {
-    return config.spec;
+    return;
   }
   pushNote(
     ctx,
-    `Round ${config.round}: pre-critic compaction applied for ${config.tierLabel.toUpperCase()} stage.`,
+    `Round ${config.round}: ${config.tierLabel.toUpperCase()} spec exceeds critique-safe budget (${estimateTokens(config.spec)} > ${LIMITS.critiqueSpecTokens}).`,
   );
-  const compactPrompt = buildCompactPrompt(
-    config.goal,
-    config.userNotes,
-    config.spec,
-    LIMITS.critiqueSpecTokens,
-    config.tierLabel,
-    config.memoryBlock,
-  );
-  const repaired = await config.rewriteCall(
-    compactPrompt,
-    `${config.tierLabel}_precritic_compact`,
-    parseRepairTemperature(),
-  );
-  return applySanitize(ctx, repaired.text);
 }
 
 async function runRepairAndCompaction(
@@ -1233,7 +1209,7 @@ async function runRepairAndCompaction(
     repairTemperature: number;
     rewriteCall: (prompt: string, step: string, temperature: number) => Promise<ProviderResult>;
   },
-): Promise<{ spec: string; structural: StructuralCheck; repaired: boolean; compacted: boolean }> {
+): Promise<{ spec: string; structural: StructuralCheck; repaired: boolean }> {
   const candidates: SpecCandidate[] = [];
   const initial = applySanitize(ctx, config.initialSpec);
   candidates.push({
@@ -1245,14 +1221,12 @@ async function runRepairAndCompaction(
 
   let best = chooseBestCandidate(candidates);
   let repaired = false;
-  let compacted = false;
 
   if (best.structural.passed && estimateTokens(best.spec) <= LIMITS.draftTokens) {
     return {
       spec: best.spec,
       structural: best.structural,
       repaired,
-      compacted,
     };
   }
 
@@ -1281,38 +1255,17 @@ async function runRepairAndCompaction(
     best = chooseBestCandidate(candidates);
     repaired = true;
   }
-
-  for (let attempt = 1; attempt <= LIMITS.compactAttempts; attempt += 1) {
-    if (estimateTokens(best.spec) <= LIMITS.draftTokens) break;
-    const compactPrompt = buildCompactPrompt(
-      config.goal,
-      config.userNotes,
-      best.spec,
-      LIMITS.draftTokens,
-      config.tierLabel,
-      config.memoryBlock,
+  if (estimateTokens(best.spec) > LIMITS.draftTokens) {
+    pushNote(
+      ctx,
+      `Round ${config.round}: ${config.tierLabel.toUpperCase()} spec remains over draft budget after repair (${estimateTokens(best.spec)} > ${LIMITS.draftTokens}).`,
     );
-    const compactResult = await config.rewriteCall(
-      compactPrompt,
-      `${config.rewriteStepPrefix}_compact_${attempt}`,
-      config.repairTemperature,
-    );
-    const compactText = applySanitize(ctx, compactResult.text);
-    candidates.push({
-      spec: compactText,
-      structural: structuralRubric(compactText),
-      blockerCount: config.blockerCount,
-      source: `compact-${attempt}`,
-    });
-    best = chooseBestCandidate(candidates);
-    compacted = true;
   }
 
   return {
     spec: best.spec,
     structural: best.structural,
     repaired,
-    compacted,
   };
 }
 
@@ -1337,21 +1290,13 @@ async function runFreeRound(
     provider: 'free',
     model: ctx.models.freeDrafter,
   });
-  spec = await compactSpecBeforeCriticIfNeeded(ctx, {
+  noteSpecOverCriticBudget(ctx, {
     round,
-    goal,
-    userNotes: ctx.input.userNotes,
-    memoryBlock,
     spec,
     tierLabel: 'free',
-    rewriteCall: freeRewriteCall,
   });
 
-  const freeCriticPrompt = buildCriticPrompt(
-    goal,
-    spec,
-    'Architecture and implementation feasibility blockers only.',
-  );
+  const freeCriticPrompt = buildCriticPrompt(goal, spec);
 
   const criticRuns: CriticRun[] = [];
   if (ctx.policy.allowGemini) {
@@ -1420,9 +1365,14 @@ async function runFreeRound(
   }
 
   const preRepairStructural = structuralRubric(spec);
-  const needsRepairOrCompact =
-    !preRepairStructural.passed || estimateTokens(spec) > LIMITS.draftTokens;
-  const repairResult = needsRepairOrCompact
+  if (estimateTokens(spec) > LIMITS.draftTokens) {
+    pushNote(
+      ctx,
+      `Round ${round}: FREE rewrite exceeds draft budget (${estimateTokens(spec)} > ${LIMITS.draftTokens}).`,
+    );
+  }
+  const needsRepair = !preRepairStructural.passed;
+  const repairResult = needsRepair
     ? await runRepairAndCompaction(ctx, {
         round,
         goal,
@@ -1439,7 +1389,6 @@ async function runFreeRound(
         spec,
         structural: preRepairStructural,
         repaired: false,
-        compacted: false,
       };
   spec = repairResult.spec;
 
@@ -1503,21 +1452,12 @@ async function runFreeLowRound(
       : ctx.policy.allowGemini
         ? { provider: 'gemini', model: ctx.models.geminiLowCritic }
         : { provider: 'free', model: ctx.models.freeDrafter };
-  const lowPreCriticRewriteCall = makeRewriteCall(ctx, round, lowPreferredTarget);
-  spec = await compactSpecBeforeCriticIfNeeded(ctx, {
+  noteSpecOverCriticBudget(ctx, {
     round,
-    goal,
-    userNotes: ctx.input.userNotes,
-    memoryBlock,
     spec,
     tierLabel: 'low',
-    rewriteCall: lowPreCriticRewriteCall,
   });
-  const lowPrompt = buildCriticPrompt(
-    goal,
-    spec,
-    'Security, edge cases, and reliability blockers.',
-  );
+  const lowPrompt = buildCriticPrompt(goal, spec);
   const lowCriticPromises: Array<Promise<CriticRun>> = [];
   if (ctx.policy.allowKimi) {
     lowCriticPromises.push(
@@ -1624,9 +1564,14 @@ async function runFreeLowRound(
   const combinedBlocking = dedupeBlockers([...free.blockers, ...collectBlocking(lowRuns)]);
 
   const preRepairStructural = structuralRubric(spec);
-  const needsRepairOrCompact =
-    !preRepairStructural.passed || estimateTokens(spec) > LIMITS.draftTokens;
-  const repairResult = needsRepairOrCompact
+  if (estimateTokens(spec) > LIMITS.draftTokens) {
+    pushNote(
+      ctx,
+      `Round ${round}: LOW rewrite exceeds draft budget (${estimateTokens(spec)} > ${LIMITS.draftTokens}).`,
+    );
+  }
+  const needsRepair = !preRepairStructural.passed;
+  const repairResult = needsRepair
     ? await runRepairAndCompaction(ctx, {
         round,
         goal,
@@ -1643,7 +1588,6 @@ async function runFreeLowRound(
         spec,
         structural: preRepairStructural,
         repaired: false,
-        compacted: false,
       };
   spec = repairResult.spec;
   const hasMinor = free.hasMinorFindings || hasMinorFindings(lowRuns);
@@ -1717,26 +1661,14 @@ async function runHighTierFromBase(
     provider: 'anthropic',
     model: ctx.models.sonnet,
   });
-  spec = await compactSpecBeforeCriticIfNeeded(ctx, {
+  noteSpecOverCriticBudget(ctx, {
     round,
-    goal,
-    userNotes: ctx.input.userNotes,
-    memoryBlock,
     spec,
     tierLabel: 'high',
-    rewriteCall: highRewriteCall,
   });
 
-  const codexPrompt = buildCriticPrompt(
-    goal,
-    spec,
-    'Implementation feasibility blockers and test coverage gaps only.',
-  );
-  const claudeCriticPrompt = buildCriticPrompt(
-    goal,
-    spec,
-    'Architecture and long-term maintainability blockers.',
-  );
+  const codexPrompt = buildCriticPrompt(goal, spec);
+  const claudeCriticPrompt = buildCriticPrompt(goal, spec);
   const criticResults = await Promise.allSettled([
     runCritic(ctx, {
       round,
@@ -1898,9 +1830,14 @@ async function runHighTierFromBase(
 
   const blockers = dedupeBlockers([...base.blockers, ...collectBlocking(highRuns)]);
   const preRepairStructural = structuralRubric(spec);
-  const needsRepairOrCompact =
-    !preRepairStructural.passed || estimateTokens(spec) > LIMITS.draftTokens;
-  const repairResult = needsRepairOrCompact
+  if (estimateTokens(spec) > LIMITS.draftTokens) {
+    pushNote(
+      ctx,
+      `Round ${round}: HIGH rewrite exceeds draft budget (${estimateTokens(spec)} > ${LIMITS.draftTokens}).`,
+    );
+  }
+  const needsRepair = !preRepairStructural.passed;
+  const repairResult = needsRepair
     ? await runRepairAndCompaction(ctx, {
         round,
         goal,
@@ -1917,7 +1854,6 @@ async function runHighTierFromBase(
         spec,
         structural: preRepairStructural,
         repaired: false,
-        compacted: false,
       };
   spec = repairResult.spec;
 

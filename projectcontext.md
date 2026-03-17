@@ -441,3 +441,36 @@
 - Sync:
   - local + origin + U56E `nanoclaw` HEAD synchronized at `60773d31d43495efecfaa82759cf1b7f72af4d00`.
 
+## Update - 2026-03-17 (Debate simplification follow-up)
+
+### Scope completed in `scripts/lib/pipeline.ts`
+- Finished incomplete simplification merge safely:
+  - unified critic prompt call sites to the 2-arg contract (`goal`, `spec`)
+  - removed pre-critic LLM compaction stage (no extra compact model calls before critics)
+  - replaced pre-critic compaction with deterministic budget note (`noteSpecOverCriticBudget`)
+  - simplified post-rewrite fallback to structural repair only (single attempt max)
+  - removed compaction loop from repair path; oversize specs now log warnings instead of extra rewrite calls
+- Prompt contracts remained tightened:
+  - required section-only output enforced in draft/rewrite
+  - section-specific rules retained for `Summary/Architecture/Implementation Changes/Test Plan/Risks`.
+
+### Runtime/merge status
+- `origin/main` and local `main` are in sync before this new commit.
+- `upstream/main` is already merged into this branch lineage (no new upstream delta to merge at this time).
+- Current session could not reach U56E over Tailscale/LAN (`100.68.120.27`, `192.168.1.155` timed out), so U56E repo sync and live `nanoclaw-web` edits were not possible from this environment.
+
+### Validation evidence (follow-up pass)
+- `npm run typecheck` -> pass
+- `npm run test -- src/debate-pipeline.test.ts` -> pass (11/11)
+- `npm run build` -> pass
+
+### Friction Ledger Entry
+- Date: 2026-03-17
+- Task: finalize local/core simplification and re-sync U56E + web runtime
+- Blocker: U56E unreachable from this session (SSH connect timeout on Tailscale/LAN IPs)
+- Classification: Workflow gap
+- Impact: unable to apply/verify `nanoclaw-web` runtime changes or host-to-host repo parity during this run
+- Durable Fix Path: Hook + repo change (connectivity preflight script before deploy/sync; fail fast when remote unavailable)
+- Owner: jaman
+- Status: open
+
