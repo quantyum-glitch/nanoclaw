@@ -487,6 +487,30 @@
 - `npm run build` -> pass
 - `npm run debate -- --help` -> pass; shows new `fast` mode and A/B flags
 
+## Update - 2026-03-17 (UI execution blocker surfaced)
+
+### Root cause
+- Requested UI changes (web workbench controls + real-time per-step rendering) target `nanoclaw-web`, not this `nanoclaw` repo.
+- This workspace does not contain the `nanoclaw-web` source tree (no `app/components/NanoClawChat.tsx`, no `app/api/debate/route.ts`).
+- Remote host status from this machine:
+  - `tailscale status` shows `u56e (100.68.120.27)` as offline (last seen ~19h).
+  - direct SSH to `100.68.120.27` and `192.168.1.155` times out.
+
+### Impact
+- Cannot implement/deploy requested web UI updates from this session until:
+  1) `u56e` is online/reachable, or
+  2) `nanoclaw-web` repo/folder is available locally in this workspace.
+
+### Friction Ledger Entry
+- Date: 2026-03-17
+- Task: add fast mode + live streaming step cards to web workbench UI
+- Blocker: target repo missing locally and runtime host offline
+- Classification: Workflow gap
+- Impact: repeated requests appear "undone" despite core pipeline changes landing
+- Durable Fix Path: Repo change + workflow: keep `nanoclaw-web` under git and mirrored locally; add preflight reachability gate before accepting UI tasks as executable
+- Owner: jaman
+- Status: open
+
 ### Validation evidence (follow-up pass)
 - `npm run typecheck` -> pass
 - `npm run test -- src/debate-pipeline.test.ts` -> pass (11/11)
