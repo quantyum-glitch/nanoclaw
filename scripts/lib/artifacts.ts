@@ -80,10 +80,12 @@ function renderSpecMarkdown(input: ArtifactWriteInput): string {
   chunks.push('');
   chunks.push(input.spec.trim() || '_No spec content generated._');
   chunks.push('');
-  chunks.push('## Post-Implementation Review');
-  chunks.push('');
-  chunks.push(input.postImplementationReview.trim() || '_No post-review content._');
-  chunks.push('');
+  if (input.postImplementationReview.trim()) {
+    chunks.push('## Post-Implementation Review');
+    chunks.push('');
+    chunks.push(input.postImplementationReview.trim());
+    chunks.push('');
+  }
   chunks.push('## Metadata');
   chunks.push('');
   chunks.push(`- Status: \`${input.status}\``);

@@ -230,11 +230,11 @@ function printSummary(
 function printSpecToTerminal(spec: string, postReview: string): void {
   console.log('\n----- BEGIN GENERATED SPEC -----\n');
   console.log(spec.trim() || '_No spec content generated._');
+  console.log('\n----- END GENERATED SPEC -----\n');
   if (postReview.trim()) {
-    console.log('\n## Post-Implementation Review\n');
+    console.log('\n----- REVIEW NOTES (SEPARATE) -----\n');
     console.log(postReview.trim());
   }
-  console.log('\n----- END GENERATED SPEC -----\n');
 }
 
 function loadDebateEnv(): void {

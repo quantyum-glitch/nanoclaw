@@ -90,7 +90,7 @@ const LIMITS = {
   critiqueSpecTokens: 3200,
   critiqueSummaryTokens: 800,
   decisionMemoryTokens: 500,
-  perCallTimeoutMs: 90_000,
+  perCallTimeoutMs: Number.parseInt(process.env.SPEC_PER_CALL_TIMEOUT_MS || '180000', 10),
   freeRoundBudgetMs: 3 * 60_000,
   freeLowRoundBudgetMs: 5 * 60_000,
   debateRoundBudgetMs: 10 * 60_000,
@@ -99,6 +99,10 @@ const LIMITS = {
   goalMaxChars: 3000,
   goalSummaryMaxWords: 500,
 } as const;
+
+if (!Number.isFinite(LIMITS.perCallTimeoutMs) || LIMITS.perCallTimeoutMs < 30_000) {
+  throw new Error('Invalid SPEC_PER_CALL_TIMEOUT_MS. Must be a number >= 30000.');
+}
 
 export interface PipelineResumeCheckpoint {
   goal: string;
@@ -567,6 +571,7 @@ function buildDraftPrompt(
       '- Keep style changes minimal unless they remove confusion.',
       '',
       'Return markdown with required sections:',
+      '(only these sections, in this order, with no additional top-level sections)',
       '## Summary',
       '## Architecture',
       '## Implementation Changes',
@@ -593,6 +598,7 @@ function buildDraftPrompt(
     '- Include edge cases and failure modes.',
     '',
     'Return markdown with these required sections:',
+    '(only these sections, in this order, with no additional top-level sections)',
     '## Summary',
     '## Architecture',
     '## Implementation Changes',
@@ -668,6 +674,7 @@ function buildRewritePrompt(
     currentSpec,
     '',
     'Return markdown with required sections:',
+    '(only these sections, in this order, with no additional top-level sections)',
     '## Summary',
     '## Architecture',
     '## Implementation Changes',
@@ -695,6 +702,14 @@ function buildRepairPrompt(
     '',
     `Tier: ${tierLabel.toUpperCase()}`,
     `Missing sections: ${missingSections.join(', ')}`,
+    '',
+    'Return markdown with required sections only:',
+    '(only these sections, in this order, with no additional top-level sections)',
+    '## Summary',
+    '## Architecture',
+    '## Implementation Changes',
+    '## Test Plan',
+    '## Risks',
     '',
     'Current spec:',
     currentSpec,
@@ -724,6 +739,7 @@ function buildCompactPrompt(
     '- Convert prose to bullets.',
     '- Remove redundancy.',
     '- Preserve all required sections and code blocks.',
+    '- Keep only required sections (no additional top-level sections).',
     '',
     'Current spec:',
     currentSpec,
@@ -2291,14 +2307,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     }
 
     postReview = (lastRound?.postSections || []).join('\n\n').trim();
-    if (!postReview) {
-      postReview =
-        decision.status === 'NO_HIGH_TIER'
-          ? 'Debate high tier was not available; returned lower-tier result.'
-          : decision.status === 'QUOTA_EXHAUSTED'
-            ? 'Execution stopped at round boundary because free-tier quota was exhausted.'
-          : 'No post-review details available.';
-    }
 
     decision.costEstimateUsd = estimateCostUsd(decision.callCounts);
     decision.freePromptUsage.used = countFreeCalls(decision.callCounts);
