@@ -410,3 +410,34 @@
 - Owner: jaman
 - Status: open
 
+## Update - 2026-03-17 (Debate simplification pass)
+
+### Simplifications applied (core `nanoclaw` repo)
+- Increased default per-call timeout for debate pipeline calls:
+  - `SPEC_PER_CALL_TIMEOUT_MS` default now `180000` ms
+- Tightened draft/rewrite/repair/compact prompt contracts:
+  - enforce only required spec sections in fixed order
+  - disallow extra top-level sections
+- Stopped warning fallback text from being injected into post-review/spec content when no reviewer sections exist.
+- Terminal output separation improved:
+  - generated spec is bounded by explicit begin/end markers
+  - review notes print in a separate block outside spec markers.
+
+### Simplifications applied (live `nanoclaw-web` on U56E)
+- `~/projects/nanoclaw-web/app/api/debate/route.ts`:
+  - CLI timeout now env-driven (`WEB_DEBATE_CLI_TIMEOUT_MS`, default `180000`)
+  - rewrite prompt now puts critique before current spec and bans reviewer/meta sections in output
+  - removed final synthesis/fallback plan step (which produced `Discarded Agent Ideas`, `Open Questions`, and warning bleed)
+  - final result now uses converged `finalSpec` directly
+- Rebuilt and restarted `nanoclaw-web` successfully.
+
+### Validation evidence
+- Local core:
+  - `npm run test -- src/debate-pipeline.test.ts` -> pass
+  - `npm run build` -> pass
+- U56E web:
+  - `npm run build` in `~/projects/nanoclaw-web` -> pass
+  - `systemctl --user status nanoclaw-web` -> active
+- Sync:
+  - local + origin + U56E `nanoclaw` HEAD synchronized at `60773d31d43495efecfaa82759cf1b7f72af4d00`.
+
