@@ -462,6 +462,31 @@
   - `9d5998fc54713297ddbbd37871da875f0bb28d38` (`origin/main` now matches local `main`)
 - `git merge upstream/main` result: `Already up to date`.
 
+## Update - 2026-03-17 (Fast mode A/B selection)
+
+### Scope completed
+- Added new debate mode `fast` with explicit role split:
+  - `A` drafter/rewriter model
+  - `B` critic model
+- New CLI flags in `scripts/debate.ts`:
+  - `--mode fast`
+  - `--fast-drafter <free|gemini|kimi|codex|claude>`
+  - `--fast-critic <free|gemini|kimi|codex|claude>`
+- Pipeline behavior in `scripts/lib/pipeline.ts`:
+  - new `runFastRound()` path:
+    - draft with A
+    - critique with B
+    - rewrite with A
+    - single structural repair fallback if needed
+  - fast-mode free-call quota estimate now depends on A/B choices
+  - no architecture change to existing `free`, `free+low`, `debate` flows.
+
+### Validation evidence (fast mode)
+- `npm run typecheck` -> pass
+- `npm run test -- src/debate-pipeline.test.ts` -> pass (13 tests)
+- `npm run build` -> pass
+- `npm run debate -- --help` -> pass; shows new `fast` mode and A/B flags
+
 ### Validation evidence (follow-up pass)
 - `npm run typecheck` -> pass
 - `npm run test -- src/debate-pipeline.test.ts` -> pass (11/11)

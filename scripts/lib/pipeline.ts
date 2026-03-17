@@ -38,7 +38,8 @@ import {
   trimApproxTokens,
 } from './rubric.js';
 
-export type DebateMode = 'free' | 'free+low' | 'debate';
+export type DebateMode = 'free' | 'free+low' | 'debate' | 'fast';
+export type FastAgent = 'free' | 'gemini' | 'kimi' | 'codex' | 'claude';
 
 export type PipelineStatus =
   | 'REVIEWED'
@@ -115,6 +116,8 @@ export interface PipelineInput {
   goal: string;
   userNotes?: string;
   mode: DebateMode;
+  fastDrafter?: FastAgent;
+  fastCritic?: FastAgent;
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
   repeat: number;
@@ -258,6 +261,11 @@ interface RoundState {
   postSections: string[];
 }
 
+interface FastModeSelection {
+  drafter: FastAgent;
+  critic: FastAgent;
+}
+
 interface StepPlan {
   expectedSteps: number;
   currentStep: number;
@@ -284,6 +292,7 @@ interface SpecCandidate {
 
 type RewriteTarget =
   | { provider: 'free'; model: string }
+  | { provider: 'openrouter'; model: string }
   | { provider: 'gemini'; model: string }
   | { provider: 'kimi'; model: string }
   | { provider: 'anthropic'; model: string };
@@ -484,6 +493,15 @@ function estimateFreeCallsForRound(
   resumeMode: boolean,
 ): number {
   if (!policy.allowOpenRouter || resumeMode) return 0;
+
+  if (input.mode === 'fast') {
+    const fastDrafter = input.fastDrafter || 'gemini';
+    const fastCritic = input.fastCritic || 'free';
+    let estimated = 0;
+    if (fastDrafter === 'free') estimated += 2; // draft + rewrite
+    if (fastCritic === 'free') estimated += 1; // critic
+    return estimated;
+  }
 
   // Baseline free-route usage: free draft + free rewrite.
   let estimated = 2;
@@ -1136,6 +1154,23 @@ function makeRewriteCall(
         call: async () =>
           await callKimi(prompt, {
             modelOverride: target.model,
+            maxOutputTokens: LIMITS.draftTokens,
+            timeoutMs: LIMITS.perCallTimeoutMs,
+            temperature,
+          }),
+      });
+    }
+    if (target.provider === 'openrouter') {
+      registerCall(ctx, `openrouter:${target.model}`);
+      return await runStepWithRetry(ctx, {
+        round,
+        step,
+        provider: 'openrouter',
+        model: target.model,
+        prompt,
+        call: async () =>
+          await callOpenRouter([{ role: 'user', content: prompt }], {
+            model: target.model,
             maxOutputTokens: LIMITS.draftTokens,
             timeoutMs: LIMITS.perCallTimeoutMs,
             temperature,
@@ -1917,6 +1952,227 @@ async function runDebateHighOnlyRound(
   return await runHighTierFromBase(ctx, round, goal, memoryBlock, base);
 }
 
+function resolveFastSelection(input: PipelineInput): FastModeSelection {
+  return {
+    drafter: input.fastDrafter || 'gemini',
+    critic: input.fastCritic || 'free',
+  };
+}
+
+function tierForFastAgent(agent: FastAgent): 1 | 2 | 3 {
+  if (agent === 'codex' || agent === 'claude') return 3;
+  if (agent === 'gemini' || agent === 'kimi') return 2;
+  return 1;
+}
+
+function resolveFastRewriteTarget(
+  ctx: StepContext,
+  role: FastAgent,
+): RewriteTarget {
+  switch (role) {
+    case 'free':
+      if (!ctx.policy.allowOpenRouter) {
+        throw new Error('FAST mode selected free drafter but OpenRouter is unavailable.');
+      }
+      return { provider: 'free', model: ctx.models.freeDrafter };
+    case 'gemini':
+      if (!ctx.policy.allowGemini) {
+        throw new Error('FAST mode selected gemini drafter but Gemini is unavailable.');
+      }
+      return { provider: 'gemini', model: ctx.models.geminiFreeCritic };
+    case 'kimi':
+      if (!ctx.policy.allowKimi) {
+        throw new Error('FAST mode selected kimi drafter but Kimi is unavailable.');
+      }
+      return { provider: 'kimi', model: ctx.models.kimiLowCritic };
+    case 'codex':
+      if (ctx.policy.freeTierOnly || !ctx.policy.allowOpenRouter) {
+        throw new Error('FAST mode selected codex drafter but high-tier OpenRouter route is unavailable.');
+      }
+      return { provider: 'openrouter', model: ctx.models.codexCritic };
+    case 'claude':
+      if (ctx.policy.freeTierOnly || !hasEnv('ANTHROPIC_API_KEY')) {
+        throw new Error('FAST mode selected claude drafter but Anthropic is unavailable.');
+      }
+      return { provider: 'anthropic', model: ctx.models.sonnet };
+    default:
+      return { provider: 'free', model: ctx.models.freeDrafter };
+  }
+}
+
+function resolveFastCriticTarget(
+  ctx: StepContext,
+  role: FastAgent,
+): { provider: 'openrouter' | 'gemini' | 'kimi' | 'anthropic'; model: string } {
+  switch (role) {
+    case 'free':
+      if (!ctx.policy.allowOpenRouter) {
+        throw new Error('FAST mode selected free critic but OpenRouter is unavailable.');
+      }
+      return { provider: 'openrouter', model: ctx.models.freeCritic };
+    case 'gemini':
+      if (!ctx.policy.allowGemini) {
+        throw new Error('FAST mode selected gemini critic but Gemini is unavailable.');
+      }
+      return { provider: 'gemini', model: ctx.models.geminiFreeCritic };
+    case 'kimi':
+      if (!ctx.policy.allowKimi) {
+        throw new Error('FAST mode selected kimi critic but Kimi is unavailable.');
+      }
+      return { provider: 'kimi', model: ctx.models.kimiLowCritic };
+    case 'codex':
+      if (ctx.policy.freeTierOnly || !ctx.policy.allowOpenRouter) {
+        throw new Error('FAST mode selected codex critic but high-tier OpenRouter route is unavailable.');
+      }
+      return { provider: 'openrouter', model: ctx.models.codexCritic };
+    case 'claude':
+      if (ctx.policy.freeTierOnly || !hasEnv('ANTHROPIC_API_KEY')) {
+        throw new Error('FAST mode selected claude critic but Anthropic is unavailable.');
+      }
+      return { provider: 'anthropic', model: ctx.models.opus };
+    default:
+      return { provider: 'openrouter', model: ctx.models.freeCritic };
+  }
+}
+
+async function runFastRound(
+  ctx: StepContext,
+  round: number,
+  goal: string,
+  memoryBlock: string,
+  seedSpec?: string,
+): Promise<RoundState> {
+  setRoundStepPlan(ctx, round, 5);
+  const selection = resolveFastSelection(ctx.input);
+  markTier(ctx, tierForFastAgent(selection.drafter));
+  markTier(ctx, tierForFastAgent(selection.critic));
+  pushNote(
+    ctx,
+    `FAST mode: drafter=${selection.drafter}, critic=${selection.critic}.`,
+  );
+
+  const drafterTarget = resolveFastRewriteTarget(ctx, selection.drafter);
+  const criticTarget = resolveFastCriticTarget(ctx, selection.critic);
+  const fastRewriteCall = makeRewriteCall(ctx, round, drafterTarget);
+
+  const draftPrompt = buildDraftPrompt(goal, ctx.input.userNotes, seedSpec, memoryBlock);
+  const draft = await fastRewriteCall(draftPrompt, 'fast_draft', 0.2);
+  let spec = applySanitize(ctx, draft.text);
+  noteSpecOverCriticBudget(ctx, {
+    round,
+    spec,
+    tierLabel: 'free',
+  });
+
+  const criticPrompt = buildCriticPrompt(goal, spec);
+  const criticRun = await runCritic(ctx, {
+    round,
+    step: `fast_critic_${selection.critic}`,
+    critic: `FastCritic(${selection.critic})`,
+    provider: criticTarget.provider,
+    model: criticTarget.model,
+    tier: tierForFastAgent(selection.critic),
+    prompt: criticPrompt,
+    call: async () => {
+      if (criticTarget.provider === 'openrouter') {
+        return await callOpenRouter([{ role: 'user', content: criticPrompt }], {
+          model: criticTarget.model,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        });
+      }
+      if (criticTarget.provider === 'gemini') {
+        return await callGemini(criticPrompt, {
+          modelOverride: criticTarget.model,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        });
+      }
+      if (criticTarget.provider === 'kimi') {
+        return await callKimi(criticPrompt, {
+          modelOverride: criticTarget.model,
+          maxOutputTokens: 1000,
+          timeoutMs: LIMITS.perCallTimeoutMs,
+          temperature: 0.1,
+        });
+      }
+      return await callAnthropic(criticPrompt, {
+        model: criticTarget.model,
+        maxOutputTokens: 1000,
+        timeoutMs: LIMITS.perCallTimeoutMs,
+        temperature: 0.1,
+      });
+    },
+  });
+
+  let unreviewed = false;
+  const blocking = collectBlocking([criticRun]);
+  if (!criticRun.available) {
+    unreviewed = true;
+    ctx.decision.degraded = true;
+    pushNote(ctx, 'FAST mode critic unavailable. Returning draft without rewrite.');
+  } else {
+    const feedback = `### ${criticRun.critic}\n${summarizeCritique(criticRun.raw)}`;
+    const rewritePrompt = buildRewritePrompt(
+      goal,
+      ctx.input.userNotes,
+      spec,
+      feedback,
+      'free',
+      memoryBlock,
+    );
+    const rewrite = await fastRewriteCall(rewritePrompt, 'fast_rewrite', 0.2);
+    spec = applySanitize(ctx, rewrite.text);
+  }
+
+  const preRepairStructural = structuralRubric(spec);
+  if (estimateTokens(spec) > LIMITS.draftTokens) {
+    pushNote(
+      ctx,
+      `Round ${round}: FAST rewrite exceeds draft budget (${estimateTokens(spec)} > ${LIMITS.draftTokens}).`,
+    );
+  }
+  const repairResult = !preRepairStructural.passed
+    ? await runRepairAndCompaction(ctx, {
+        round,
+        goal,
+        userNotes: ctx.input.userNotes,
+        memoryBlock,
+        initialSpec: spec,
+        blockerCount: blocking.length,
+        tierLabel: 'free',
+        rewriteStepPrefix: 'fast_postfix',
+        repairTemperature: parseRepairTemperature(),
+        rewriteCall: fastRewriteCall,
+      })
+    : {
+        spec,
+        structural: preRepairStructural,
+        repaired: false,
+      };
+  spec = repairResult.spec;
+
+  const hasMinor = hasMinorFindings([criticRun]);
+  const structural = repairResult.structural;
+  const clean = !unreviewed && criticRun.available && blocking.length === 0 && structural.passed;
+
+  return {
+    spec,
+    blockers: blocking,
+    hasMinorFindings: hasMinor,
+    clean,
+    unreviewed,
+    degradedLow: false,
+    highTierMissing: false,
+    highTierAuthFailure: false,
+    highTierExecuted: false,
+    structural,
+    postSections: [toReviewMarkdown(criticRun)],
+  };
+}
+
 function estimateCostUsd(callCounts: Record<string, number>): number {
   let total = 0;
   for (const [key, count] of Object.entries(callCounts)) {
@@ -2103,6 +2359,9 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       let roundState: RoundState;
       if (input.mode === 'free') {
         roundState = await runFreeRound(ctx, round, normalizedGoal, memoryBlock, seedSpec);
+        decision.timingMs.free += Date.now() - stageStart;
+      } else if (input.mode === 'fast') {
+        roundState = await runFastRound(ctx, round, normalizedGoal, memoryBlock, seedSpec);
         decision.timingMs.free += Date.now() - stageStart;
       } else if (input.mode === 'free+low') {
         roundState = await runFreeLowRound(

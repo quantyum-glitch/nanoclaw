@@ -7,6 +7,7 @@ import { loadEnvFileIntoProcess } from './lib/env-file.js';
 import {
   DebateMode,
   EXIT_CODES,
+  FastAgent,
   PipelineEvent,
   PipelineInput,
   PipelineResumeCheckpoint,
@@ -19,6 +20,8 @@ interface CliArgs {
   userNotes?: string;
   userNotesFile?: string;
   mode: DebateMode;
+  fastDrafter?: FastAgent;
+  fastCritic?: FastAgent;
   tierLimit: 1 | 2 | 3;
   allowTier3: boolean;
   outputDir: string;
@@ -39,7 +42,9 @@ function printHelp(): void {
       '  node scripts/debate.ts --goal "<text>" [options]',
       '',
       'Options:',
-      '  --mode <free|free+low|debate>         Mode (default: free+low)',
+      '  --mode <free|free+low|debate|fast>    Mode (default: free+low)',
+      '  --fast-drafter <free|gemini|kimi|codex|claude>  FAST mode drafter/rewriter (A)',
+      '  --fast-critic <free|gemini|kimi|codex|claude>   FAST mode critic (B)',
       '  --repeat <1..10>                      Repeat rounds (default: 1)',
       '  --tier-limit <1|2|3>                  Max tier (default: 2)',
       '  --allow-tier-3                        Allow high-cost high tier in debate mode',
@@ -70,8 +75,26 @@ function printHelp(): void {
 function parseMode(raw: string | undefined): DebateMode {
   if (!raw) return 'free+low';
   const mode = raw.toLowerCase();
-  if (mode === 'free' || mode === 'free+low' || mode === 'debate') return mode;
+  if (mode === 'free' || mode === 'free+low' || mode === 'debate' || mode === 'fast')
+    return mode;
   throw new Error(`Invalid --mode value: ${raw}`);
+}
+
+function parseFastAgent(raw: string | undefined, flag: string): FastAgent | undefined {
+  if (!raw) return undefined;
+  const normalized = raw.toLowerCase();
+  if (
+    normalized === 'free' ||
+    normalized === 'gemini' ||
+    normalized === 'kimi' ||
+    normalized === 'codex' ||
+    normalized === 'claude'
+  ) {
+    return normalized;
+  }
+  throw new Error(
+    `Invalid ${flag} value: ${raw}. Expected one of free|gemini|kimi|codex|claude.`,
+  );
 }
 
 function parseTierLimit(raw: string | undefined): 1 | 2 | 3 {
@@ -93,6 +116,8 @@ function parseRepeat(raw: string | undefined): number {
 function parseArgs(argv: string[]): CliArgs {
   let goal = '';
   let modeRaw: string | undefined;
+  let fastDrafterRaw: string | undefined;
+  let fastCriticRaw: string | undefined;
   let tierLimitRaw: string | undefined;
   let outputDir = './specs';
   let allowTier3 = false;
@@ -156,6 +181,14 @@ function parseArgs(argv: string[]): CliArgs {
         modeRaw = next;
         i += 1;
         break;
+      case '--fast-drafter':
+        fastDrafterRaw = next;
+        i += 1;
+        break;
+      case '--fast-critic':
+        fastCriticRaw = next;
+        i += 1;
+        break;
       case '--tier-limit':
         tierLimitRaw = next;
         i += 1;
@@ -195,9 +228,12 @@ function parseArgs(argv: string[]): CliArgs {
     enableKimi = false;
     allowTier3 = false;
   }
+  const mode = parseMode(modeRaw);
   return {
     goal,
-    mode: parseMode(modeRaw),
+    mode,
+    fastDrafter: parseFastAgent(fastDrafterRaw, '--fast-drafter'),
+    fastCritic: parseFastAgent(fastCriticRaw, '--fast-critic'),
     tierLimit: parseTierLimit(tierLimitRaw),
     allowTier3,
     outputDir,
@@ -352,6 +388,8 @@ async function main(): Promise<void> {
   const pipelineInput: PipelineInput = {
     goal: args.goal,
     mode: args.mode,
+    fastDrafter: args.fastDrafter,
+    fastCritic: args.fastCritic,
     userNotes: args.userNotes,
     tierLimit: args.tierLimit,
     allowTier3: args.allowTier3,
@@ -364,8 +402,12 @@ async function main(): Promise<void> {
     onEvent: args.streamJsonEvents ? printEventAsJson : undefined,
   };
 
+  const fastSuffix =
+    args.mode === 'fast'
+      ? `, fastDrafter=${args.fastDrafter || 'gemini'}, fastCritic=${args.fastCritic || 'free'}`
+      : '';
   console.log(
-    `Starting debate run (mode=${args.mode}, tierLimit=${args.tierLimit}, repeat=${args.repeat})`,
+    `Starting debate run (mode=${args.mode}, tierLimit=${args.tierLimit}, repeat=${args.repeat}${fastSuffix})`,
   );
 
   const result = await runPipeline(pipelineInput);

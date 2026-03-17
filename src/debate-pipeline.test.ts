@@ -68,6 +68,42 @@ describe('debate pipeline quota estimators', () => {
     );
     expect(estimated).toBe(0);
   });
+
+  it('estimates fast-mode free usage based on selected A/B agents', () => {
+    const estimated = PIPELINE_TEST_ONLY.estimateFreeCallsForRound(
+      makeInput({
+        mode: 'fast',
+        fastDrafter: 'free',
+        fastCritic: 'free',
+      }),
+      {
+        allowOpenRouter: true,
+        allowGemini: true,
+        allowKimi: true,
+        freeTierOnly: false,
+      },
+      false,
+    );
+    expect(estimated).toBe(3);
+  });
+
+  it('estimates zero free calls in fast mode when A/B are paid routes', () => {
+    const estimated = PIPELINE_TEST_ONLY.estimateFreeCallsForRound(
+      makeInput({
+        mode: 'fast',
+        fastDrafter: 'gemini',
+        fastCritic: 'kimi',
+      }),
+      {
+        allowOpenRouter: true,
+        allowGemini: true,
+        allowKimi: true,
+        freeTierOnly: false,
+      },
+      false,
+    );
+    expect(estimated).toBe(0);
+  });
 });
 
 describe('debate pipeline free call counting', () => {
