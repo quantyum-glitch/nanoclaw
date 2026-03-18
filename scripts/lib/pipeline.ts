@@ -475,8 +475,193 @@ function buildGoalNormalizationPrompt(rawGoal: string): string {
   ].join('\n');
 }
 
-function summarizeCritique(raw: string): string {
-  return trimApproxTokens(raw, LIMITS.critiqueSummaryTokens);
+function matchHeader(line: string): string {
+  return line
+    .replace(/^##\s*/i, '')
+    .trim()
+    .toLowerCase();
+}
+
+function extractSectionByHeaders(spec: string, headers: string[]): string {
+  const normalizedHeaders = headers.map((h) => h.trim().toLowerCase());
+  const lines = spec.split(/\r?\n/);
+  let start = -1;
+  for (let i = 0; i < lines.length; i += 1) {
+    if (!/^##\s+/.test(lines[i])) continue;
+    const normalized = matchHeader(lines[i]);
+    if (normalizedHeaders.includes(normalized)) {
+      start = i;
+      break;
+    }
+  }
+  if (start < 0) return '';
+  const out: string[] = [lines[start]];
+  for (let i = start + 1; i < lines.length; i += 1) {
+    if (/^##\s+/.test(lines[i])) break;
+    out.push(lines[i]);
+  }
+  return out.join('\n').trim();
+}
+
+function extractCodeBlocks(text: string): string[] {
+  return [...text.matchAll(/```[\s\S]*?```/g)].map((match) => match[0]).filter(Boolean);
+}
+
+function prepareSpecForCritic(
+  ctx: StepContext,
+  config: {
+    round: number;
+    spec: string;
+    tierLabel: 'free' | 'low' | 'high' | 'fast';
+    implementationOnly?: boolean;
+  },
+): string {
+  const original = config.spec.trim();
+  if (!original) return original;
+
+  if (config.implementationOnly) {
+    const implementation =
+      extractSectionByHeaders(original, ['implementation changes', 'proposed changes']) || original;
+    const codeBlocks = extractCodeBlocks(implementation);
+    let focused =
+      codeBlocks.length > 0
+        ? ['## Implementation Changes', ...codeBlocks].join('\n\n')
+        : implementation;
+
+    if (estimateTokens(focused) > LIMITS.critiqueSpecTokens) {
+      focused = trimApproxTokens(focused, LIMITS.critiqueSpecTokens);
+    }
+
+    if (focused !== original) {
+      pushNote(
+        ctx,
+        `Round ${config.round}: ${config.tierLabel.toUpperCase()} critic input focused to implementation/code view (${estimateTokens(original)} -> ${estimateTokens(focused)} est tokens).`,
+      );
+    }
+    return focused;
+  }
+
+  if (estimateTokens(original) <= LIMITS.critiqueSpecTokens) {
+    return original;
+  }
+
+  const parts: string[] = [];
+  const summary = extractSectionByHeaders(original, ['summary']);
+  const implementation = extractSectionByHeaders(original, [
+    'implementation changes',
+    'proposed changes',
+  ]);
+  const tests = extractSectionByHeaders(original, ['test plan', 'acceptance criteria']);
+  const risks = extractSectionByHeaders(original, ['risks']);
+  if (summary) parts.push(summary);
+  if (implementation) parts.push(implementation);
+  if (tests) parts.push(tests);
+  if (risks) parts.push(risks);
+
+  let reduced = parts.join('\n\n').trim();
+  if (!reduced) {
+    reduced = trimApproxTokens(original, LIMITS.critiqueSpecTokens);
+  } else if (estimateTokens(reduced) > LIMITS.critiqueSpecTokens) {
+    reduced = trimApproxTokens(reduced, LIMITS.critiqueSpecTokens);
+  }
+
+  pushNote(
+    ctx,
+    `Round ${config.round}: ${config.tierLabel.toUpperCase()} critic input reduced to stay within critique budget (${estimateTokens(original)} -> ${estimateTokens(reduced)} est tokens).`,
+  );
+  return reduced;
+}
+
+function buildRewriteFeedbackFromCritics(runs: CriticRun[]): string {
+  const available = runs.filter((run) => run.available);
+  if (available.length === 0) {
+    return 'No critic feedback available.';
+  }
+  return available
+    .map((run) => {
+      const lines: string[] = [];
+      lines.push(`### ${run.critic}`);
+      lines.push(`ASSESSMENT: ${run.parse.assessment}`);
+      const blockers = run.parse.blockers.filter((b) => b.severity === 'BLOCKING');
+      lines.push('BLOCKING findings:');
+      if (blockers.length === 0) lines.push('- none');
+      for (const blocker of blockers) {
+        lines.push(`- [${blocker.id}] ${blocker.description} | Fix: ${blocker.fix || 'n/a'}`);
+      }
+      lines.push('Ignore MINOR/style/Pareto suggestions during rewrite unless they are required to resolve BLOCKING findings.');
+      return lines.join('\n');
+    })
+    .join('\n\n');
+}
+
+function extractGoalConstraints(goal: string): string[] {
+  const items = goal
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^[-*]\s*/, '').trim())
+    .filter(Boolean);
+  const pooled =
+    items.length > 1
+      ? items
+      : goal
+          .split(/[.?!;]\s+/)
+          .map((item) => item.trim())
+          .filter(Boolean);
+  return [...new Set(pooled)].slice(0, 6);
+}
+
+function buildFastVerificationPrompt(
+  goal: string,
+  spec: string,
+  constraints: string[],
+): string {
+  const checklist =
+    constraints.length > 0
+      ? constraints.map((item, index) => `V${index + 1}: ${item}`).join('\n')
+      : 'V1: Implementation matches the goal requirements.';
+  return [
+    'You are a strict implementation verifier.',
+    'Evaluate whether the specification satisfies each constraint.',
+    'Return ONLY this format:',
+    'VERIFICATION: PASS|FAIL',
+    '| ID | Result | Check | Reason |',
+    '|:---|:---|:---|:---|',
+    '| V1 | YES|NO | ... | ... |',
+    'Use Result=NO when uncertain.',
+    '',
+    `Goal: ${goal}`,
+    '',
+    'Constraint checklist:',
+    checklist,
+    '',
+    'Spec to verify:',
+    spec,
+  ].join('\n');
+}
+
+function parseFastVerification(raw: string): { passed: boolean; failures: string[] } {
+  const lines = raw.split(/\r?\n/);
+  const failures: string[] = [];
+  for (const line of lines) {
+    const cells = line
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((cell) => cell.trim());
+    if (cells.length < 4) continue;
+    if (!/^V\d+/i.test(cells[0])) continue;
+    const result = cells[1].toUpperCase();
+    if (result === 'NO' || result === 'FAIL') {
+      failures.push(`${cells[0]} ${cells[2]} (${cells[3] || 'unsatisfied'})`);
+    }
+  }
+  const verdictFail = /VERIFICATION:\s*FAIL\b/i.test(raw);
+  const verdictPass = /VERIFICATION:\s*PASS\b/i.test(raw);
+  const passed = verdictPass && !verdictFail && failures.length === 0;
+  return {
+    passed,
+    failures,
+  };
 }
 
 function parseRepairTemperature(): number {
@@ -645,6 +830,15 @@ function buildCriticPrompt(goal: string, spec: string): string {
     'Review this implementation spec.',
     'You are an isolated architectural reviewer with NO filesystem/tool access.',
     'Do not cite files or line numbers.',
+    'FIRST: List every concrete constraint from the Goal and mark each as SATISFIED, VIOLATED, or IGNORED.',
+    'Any Goal constraint marked VIOLATED or IGNORED MUST be emitted as a BLOCKING row in the table.',
+    'PART A — Implementation correctness (answer first):',
+    '- Perform a line-by-line correctness check on implementation code blocks.',
+    '- Verify logic correctness for repeated executions and edge cases.',
+    '- Verify math/scoring/sorting/filtering logic where applicable.',
+    '- Verify implementation matches explicit goal constraints.',
+    'PART B — Architecture/Pareto (only after Part A):',
+    '- Suggest simpler, lower-risk, higher-leverage improvements.',
     '',
     'Output format (strict):',
     '| ID | Severity | Description | Fix |',
@@ -1213,23 +1407,6 @@ function resolveLowRewriteTarget(
   return fallbackTarget;
 }
 
-function noteSpecOverCriticBudget(
-  ctx: StepContext,
-  config: {
-    round: number;
-    spec: string;
-    tierLabel: 'free' | 'low' | 'high';
-  },
-) {
-  if (estimateTokens(config.spec) <= LIMITS.critiqueSpecTokens) {
-    return;
-  }
-  pushNote(
-    ctx,
-    `Round ${config.round}: ${config.tierLabel.toUpperCase()} spec exceeds critique-safe budget (${estimateTokens(config.spec)} > ${LIMITS.critiqueSpecTokens}).`,
-  );
-}
-
 async function runRepairAndCompaction(
   ctx: StepContext,
   config: {
@@ -1325,13 +1502,12 @@ async function runFreeRound(
     provider: 'free',
     model: ctx.models.freeDrafter,
   });
-  noteSpecOverCriticBudget(ctx, {
+  const freeCriticSpec = prepareSpecForCritic(ctx, {
     round,
     spec,
     tierLabel: 'free',
   });
-
-  const freeCriticPrompt = buildCriticPrompt(goal, spec);
+  const freeCriticPrompt = buildCriticPrompt(goal, freeCriticSpec);
 
   const criticRuns: CriticRun[] = [];
   if (ctx.policy.allowGemini) {
@@ -1383,10 +1559,7 @@ async function runFreeRound(
   } else if (Date.now() - roundStart > LIMITS.freeRoundBudgetMs) {
     pushNote(ctx, `Round ${round}: FREE stage reached budget ceiling before rewrite.`);
   } else {
-    const critiqueSummary = criticRuns
-      .filter((run) => run.available)
-      .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
-      .join('\n\n');
+    const critiqueSummary = buildRewriteFeedbackFromCritics(criticRuns);
     const rewritePrompt = buildRewritePrompt(
       goal,
       ctx.input.userNotes,
@@ -1487,12 +1660,12 @@ async function runFreeLowRound(
       : ctx.policy.allowGemini
         ? { provider: 'gemini', model: ctx.models.geminiLowCritic }
         : { provider: 'free', model: ctx.models.freeDrafter };
-  noteSpecOverCriticBudget(ctx, {
+  const lowCriticSpec = prepareSpecForCritic(ctx, {
     round,
     spec,
     tierLabel: 'low',
   });
-  const lowPrompt = buildCriticPrompt(goal, spec);
+  const lowPrompt = buildCriticPrompt(goal, lowCriticSpec);
   const lowCriticPromises: Array<Promise<CriticRun>> = [];
   if (ctx.policy.allowKimi) {
     lowCriticPromises.push(
@@ -1571,10 +1744,7 @@ async function runFreeLowRound(
       ctx.decision.degradedLow = true;
       pushNote(ctx, 'Low-tier executed with a single critic (degraded).');
     }
-    const lowSummary = lowRuns
-      .filter((run) => run.available)
-      .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
-      .join('\n\n');
+    const lowSummary = buildRewriteFeedbackFromCritics(lowRuns);
     if (Date.now() - roundStart > LIMITS.freeLowRoundBudgetMs) {
       degradedLow = true;
       pushNote(ctx, 'Low-tier rewrite skipped due to FREE+LOW budget ceiling.');
@@ -1696,14 +1866,14 @@ async function runHighTierFromBase(
     provider: 'anthropic',
     model: ctx.models.sonnet,
   });
-  noteSpecOverCriticBudget(ctx, {
+  const highCriticSpec = prepareSpecForCritic(ctx, {
     round,
     spec,
     tierLabel: 'high',
   });
 
-  const codexPrompt = buildCriticPrompt(goal, spec);
-  const claudeCriticPrompt = buildCriticPrompt(goal, spec);
+  const codexPrompt = buildCriticPrompt(goal, highCriticSpec);
+  const claudeCriticPrompt = buildCriticPrompt(goal, highCriticSpec);
   const criticResults = await Promise.allSettled([
     runCritic(ctx, {
       round,
@@ -1831,10 +2001,7 @@ async function runHighTierFromBase(
     };
   }
 
-  const highSummary = highRuns
-    .filter((run) => run.available)
-    .map((run) => `### ${run.critic}\n${summarizeCritique(run.raw)}`)
-    .join('\n\n');
+  const highSummary = buildRewriteFeedbackFromCritics(highRuns);
 
   const rewritePrompt = buildRewritePrompt(
     goal,
@@ -2035,6 +2202,43 @@ function resolveFastCriticTarget(
   }
 }
 
+async function callPromptWithCriticTarget(
+  target: { provider: 'openrouter' | 'gemini' | 'kimi' | 'anthropic'; model: string },
+  prompt: string,
+  options: { maxOutputTokens: number; temperature: number },
+): Promise<ProviderResult> {
+  if (target.provider === 'openrouter') {
+    return await callOpenRouter([{ role: 'user', content: prompt }], {
+      model: target.model,
+      maxOutputTokens: options.maxOutputTokens,
+      timeoutMs: LIMITS.perCallTimeoutMs,
+      temperature: options.temperature,
+    });
+  }
+  if (target.provider === 'gemini') {
+    return await callGemini(prompt, {
+      modelOverride: target.model,
+      maxOutputTokens: options.maxOutputTokens,
+      timeoutMs: LIMITS.perCallTimeoutMs,
+      temperature: options.temperature,
+    });
+  }
+  if (target.provider === 'kimi') {
+    return await callKimi(prompt, {
+      modelOverride: target.model,
+      maxOutputTokens: options.maxOutputTokens,
+      timeoutMs: LIMITS.perCallTimeoutMs,
+      temperature: options.temperature,
+    });
+  }
+  return await callAnthropic(prompt, {
+    model: target.model,
+    maxOutputTokens: options.maxOutputTokens,
+    timeoutMs: LIMITS.perCallTimeoutMs,
+    temperature: options.temperature,
+  });
+}
+
 async function runFastRound(
   ctx: StepContext,
   round: number,
@@ -2042,7 +2246,7 @@ async function runFastRound(
   memoryBlock: string,
   seedSpec?: string,
 ): Promise<RoundState> {
-  setRoundStepPlan(ctx, round, 5);
+  setRoundStepPlan(ctx, round, 6);
   const selection = resolveFastSelection(ctx.input);
   markTier(ctx, tierForFastAgent(selection.drafter));
   markTier(ctx, tierForFastAgent(selection.critic));
@@ -2054,17 +2258,20 @@ async function runFastRound(
   const drafterTarget = resolveFastRewriteTarget(ctx, selection.drafter);
   const criticTarget = resolveFastCriticTarget(ctx, selection.critic);
   const fastRewriteCall = makeRewriteCall(ctx, round, drafterTarget);
+  const goalChecklist = extractGoalConstraints(goal);
 
-  const draftPrompt = buildDraftPrompt(goal, ctx.input.userNotes, seedSpec, memoryBlock);
+  // FAST mode deliberately avoids prior-spec seeding to reduce anchoring/overfitting.
+  const draftPrompt = buildDraftPrompt(goal, ctx.input.userNotes, undefined, memoryBlock);
   const draft = await fastRewriteCall(draftPrompt, 'fast_draft', 0.2);
   let spec = applySanitize(ctx, draft.text);
-  noteSpecOverCriticBudget(ctx, {
+  const fastCriticSpec = prepareSpecForCritic(ctx, {
     round,
     spec,
-    tierLabel: 'free',
+    tierLabel: 'fast',
+    implementationOnly: true,
   });
 
-  const criticPrompt = buildCriticPrompt(goal, spec);
+  const criticPrompt = buildCriticPrompt(goal, fastCriticSpec);
   const criticRun = await runCritic(ctx, {
     round,
     step: `fast_critic_${selection.critic}`,
@@ -2073,48 +2280,21 @@ async function runFastRound(
     model: criticTarget.model,
     tier: tierForFastAgent(selection.critic),
     prompt: criticPrompt,
-    call: async () => {
-      if (criticTarget.provider === 'openrouter') {
-        return await callOpenRouter([{ role: 'user', content: criticPrompt }], {
-          model: criticTarget.model,
-          maxOutputTokens: 1000,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.1,
-        });
-      }
-      if (criticTarget.provider === 'gemini') {
-        return await callGemini(criticPrompt, {
-          modelOverride: criticTarget.model,
-          maxOutputTokens: 1000,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.1,
-        });
-      }
-      if (criticTarget.provider === 'kimi') {
-        return await callKimi(criticPrompt, {
-          modelOverride: criticTarget.model,
-          maxOutputTokens: 1000,
-          timeoutMs: LIMITS.perCallTimeoutMs,
-          temperature: 0.1,
-        });
-      }
-      return await callAnthropic(criticPrompt, {
-        model: criticTarget.model,
+    call: async () =>
+      await callPromptWithCriticTarget(criticTarget, criticPrompt, {
         maxOutputTokens: 1000,
-        timeoutMs: LIMITS.perCallTimeoutMs,
         temperature: 0.1,
-      });
-    },
+      }),
   });
 
   let unreviewed = false;
-  const blocking = collectBlocking([criticRun]);
+  let blocking = collectBlocking([criticRun]);
   if (!criticRun.available) {
     unreviewed = true;
     ctx.decision.degraded = true;
     pushNote(ctx, 'FAST mode critic unavailable. Returning draft without rewrite.');
   } else {
-    const feedback = `### ${criticRun.critic}\n${summarizeCritique(criticRun.raw)}`;
+    const feedback = buildRewriteFeedbackFromCritics([criticRun]);
     const rewritePrompt = buildRewritePrompt(
       goal,
       ctx.input.userNotes,
@@ -2123,7 +2303,7 @@ async function runFastRound(
       'free',
       memoryBlock,
     );
-    const rewrite = await fastRewriteCall(rewritePrompt, 'fast_rewrite', 0.2);
+    const rewrite = await fastRewriteCall(rewritePrompt, 'fast_rewrite', 0.1);
     spec = applySanitize(ctx, rewrite.text);
   }
 
@@ -2154,6 +2334,51 @@ async function runFastRound(
       };
   spec = repairResult.spec;
 
+  const verificationSections: string[] = [];
+  if (!unreviewed) {
+    const verificationPrompt = buildFastVerificationPrompt(goal, spec, goalChecklist);
+    try {
+      registerCall(ctx, `${criticTarget.provider}:${criticTarget.model}`);
+      const verification = await runStepWithRetry(ctx, {
+        round,
+        step: `fast_verify_${selection.critic}`,
+        provider: criticTarget.provider,
+        model: criticTarget.model,
+        prompt: verificationPrompt,
+        call: async () =>
+          await callPromptWithCriticTarget(criticTarget, verificationPrompt, {
+            maxOutputTokens: 900,
+            temperature: 0.1,
+          }),
+      });
+      const parsedVerification = parseFastVerification(verification.text);
+      verificationSections.push(
+        ['### FastVerification', verification.text.trim() || '(empty verification output)'].join('\n'),
+      );
+      if (!parsedVerification.passed) {
+        const failures =
+          parsedVerification.failures.length > 0
+            ? parsedVerification.failures
+            : ['Verification returned FAIL.'];
+        const verificationBlockers: Blocker[] = failures.map((failure, index) => ({
+          id: `VF${index + 1}`,
+          severity: 'BLOCKING',
+          description: failure,
+          fix: 'Revise implementation changes to satisfy this verification check.',
+        }));
+        blocking = dedupeBlockers([...blocking, ...verificationBlockers]);
+        pushNote(
+          ctx,
+          `FAST verification failed with ${verificationBlockers.length} blocking issue(s).`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.decision.degraded = true;
+      pushNote(ctx, `FAST verification unavailable: ${message}`);
+    }
+  }
+
   const hasMinor = hasMinorFindings([criticRun]);
   const structural = repairResult.structural;
   const clean = !unreviewed && criticRun.available && blocking.length === 0 && structural.passed;
@@ -2169,7 +2394,7 @@ async function runFastRound(
     highTierAuthFailure: false,
     highTierExecuted: false,
     structural,
-    postSections: [toReviewMarkdown(criticRun)],
+    postSections: [toReviewMarkdown(criticRun), ...verificationSections],
   };
 }
 
@@ -2361,7 +2586,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
         roundState = await runFreeRound(ctx, round, normalizedGoal, memoryBlock, seedSpec);
         decision.timingMs.free += Date.now() - stageStart;
       } else if (input.mode === 'fast') {
-        roundState = await runFastRound(ctx, round, normalizedGoal, memoryBlock, seedSpec);
+        // FAST mode keeps writer/critic anchored to the original user prompt.
+        roundState = await runFastRound(ctx, round, rawGoal, memoryBlock, seedSpec);
         decision.timingMs.free += Date.now() - stageStart;
       } else if (input.mode === 'free+low') {
         roundState = await runFreeLowRound(

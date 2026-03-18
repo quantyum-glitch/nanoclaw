@@ -3,6 +3,19 @@
 ## Documentation Retrieval
 - Documentation index: [docs/DOCUMENTATION_INDEX.md](docs/DOCUMENTATION_INDEX.md)
 - Rule: Consult the docs index before deep-dive retrieval so the canonical document is loaded first.
+- Repo parity rule (operational): local Dell `nanoclaw` repo, U56E `~/projects/nanoclaw`, and `origin/main` must remain at the same commit SHA after each completed patch cycle (preferred source-of-truth target: `origin/main`).
+
+## Update - 2026-03-18 (Repo Parity Directive)
+- Active requirement confirmed: Dell local repo must end each patch cycle at the same commit as U56E `~/projects/nanoclaw`, preferably matching `origin/main`.
+- Deployment/sync order:
+  - commit locally on Dell
+  - push to `origin/main`
+  - fast-forward U56E repo to that SHA
+  - verify all three SHAs match before closing task
+- Quick parity check commands:
+  - Dell local: `git rev-parse HEAD`
+  - Origin main: `git ls-remote origin refs/heads/main`
+  - U56E: `ssh jam@100.68.120.27 "cd ~/projects/nanoclaw && git rev-parse HEAD"`
 
 ## Historical Baseline (Preserved)
 
@@ -525,4 +538,263 @@
 - Durable Fix Path: Hook + repo change (connectivity preflight script before deploy/sync; fail fast when remote unavailable)
 - Owner: jaman
 - Status: open
+
+## Update - 2026-03-17 (U56E reachable + live stream verification)
+
+### Runtime status change
+- U56E is reachable again over Tailscale (`100.68.120.27`) and SSH.
+- `nanoclaw-web` source on U56E confirms required runtime features are present:
+  - mode set includes `fast`
+  - `/api/debate` supports NDJSON stream events (`run_start`, `step`, `round`, `done`, `error`)
+  - step payload includes `script`, `prompt`, `output`, `durationMs`.
+
+### Live API verification (U56E localhost)
+- Auth succeeded against `POST /api/auth`.
+- Stream run succeeded in `fast` mode and emitted real-time events:
+  - `run_start`
+  - `step` (free draft, critic, rewrite with full prompt/output payloads)
+  - `round` (`CLEAN_CONVERGENCE`)
+  - `done` (final converged spec/result object)
+- This confirms the UI can render per-step live cards during execution rather than waiting for a final-only payload.
+
+### Validation evidence
+- U56E command checks:
+  - `systemctl --user status nanoclaw-web` -> active
+  - `curl http://127.0.0.1:3010/` -> 200
+  - streamed run from `POST /api/debate` with authenticated cookie -> emitted incremental NDJSON step events.
+
+### Friction Ledger Entry
+- Date: 2026-03-17
+- Task: unblock web workbench live-visibility validation
+- Blocker: intermittent `nanoclaw-web` boot race after restart (first localhost probes can fail before Next.js is ready)
+- Classification: Workflow gap
+- Impact: false-negative smoke tests right after restart
+- Durable Fix Path: Hook/script change: add readiness loop (`curl /` with retry/backoff) before API smoke tests
+- Owner: jaman
+- Status: open
+
+## Update - 2026-03-17 (Lid-close + startup diagnostics on U56E)
+
+### Findings
+- Effective logind lid policy is already set to ignore via:
+  - `/etc/systemd/logind.conf.d/99-lid-ignore.conf`
+  - `HandleLidSwitch=ignore`, `HandleLidSwitchExternalPower=ignore`, `HandleLidSwitchDocked=ignore`
+- Previous-boot journal evidence shows shutdown was triggered by power key, not lid suspend:
+  - `Lid closed.`
+  - later `Power key pressed short.`
+  - then `Powering off...`
+- Startup delay linkage confirmed for web services:
+  - `loginctl show-user jam` had `Linger=no`, so user services depended on active login sessions.
+
+### Fix applied
+- Enabled persistent user service manager:
+  - `sudo loginctl enable-linger jam`
+- Verification:
+  - `loginctl show-user jam -p Linger` -> `Linger=yes`
+
+### Operational note
+- With `Linger=yes`, `systemctl --user` services (`nanoclaw`, `nanoclaw-web`) can start/keep running without needing an SSH login to bootstrap the user manager.
+
+## Update - 2026-03-17 (Lid-close crash investigation deep dive)
+
+### Evidence captured
+- Previous boot (`journalctl -b -1`) shows lid event followed by kernel warnings in Intel Wi-Fi stack:
+  - `Lid closed.`
+  - repeated `iwlwifi`/`iwldvm` failures and `Call Trace`
+  - `Hardware became unavailable during restart`
+  - warnings in `mac80211` (`ieee80211_reconfig`, `drv_stop`)
+- Same boot later shows manual shutdown trigger:
+  - `Power key pressed short`
+  - `Powering off...`
+
+### Interpretation
+- Current failure pattern is likely Wi-Fi driver instability around lid-close power-state transitions, not logind lid policy (already set to ignore).
+- User perception of "server died" can be caused by Wi-Fi stack collapse or kernel warning storm on local console even when lid action is configured to ignore.
+
+### Next mitigation track
+- Keep headless policy (`HandleLidSwitch*=ignore`, `Linger=yes`) as baseline.
+- Next hardening candidate: disable Wi-Fi power-saving / iwlwifi low-power transitions and retest lid close.
+
+## Update - 2026-03-17 (Applied full headless hardening)
+
+### Root cause evidence retained
+- Prior boot (`2026-03-17 21:11 UTC`) captured lid-close followed by Intel Wi-Fi stack failures:
+  - `iwlwifi` transaction timeout / register dump
+  - `iwldvm` / `mac80211` warnings with call traces
+  - `Hardware became unavailable during restart`
+- Separate event later in same boot:
+  - `Power key pressed short` then shutdown.
+
+### Changes applied on U56E
+- Logind hardening drop-in added:
+  - `/etc/systemd/logind.conf.d/98-headless-keys.conf`
+  - `HandlePowerKey=ignore`
+  - `HandleSuspendKey=ignore`
+  - `HandleHibernateKey=ignore`
+  - `HandleLidSwitch=ignore`
+  - `HandleLidSwitchExternalPower=ignore`
+  - `HandleLidSwitchDocked=ignore`
+- Wi-Fi stability tuning added:
+  - `/etc/modprobe.d/99-iwlwifi-stability.conf`
+  - `options iwlwifi power_save=0 uapsd_disable=1`
+- Boot-time Wi-Fi power-save disable service added:
+  - `/usr/local/sbin/disable-wifi-powersave`
+  - `/etc/systemd/system/disable-wifi-powersave.service` (enabled)
+- Suspend paths masked for headless operation:
+  - `sleep.target`, `suspend.target`, `hibernate.target`, `hybrid-sleep.target` -> masked
+- Rebuilt initramfs and rebooted cleanly:
+  - `update-initramfs -u`
+  - reboot completed; host reachable again.
+
+### Post-reboot verification
+- `Linger=yes` still active for `jam`.
+- `nanoclaw` + `nanoclaw-web` are active/enabled.
+- User services now start before first SSH session:
+  - `nanoclaw-web` started at `22:21:20 UTC`
+  - first `systemd-logind` user session appeared at `22:21:34 UTC`
+- Kernel module params active:
+  - `/sys/module/iwlwifi/parameters/power_save` -> `N`
+  - `/sys/module/iwlwifi/parameters/uapsd_disable` -> `1`
+
+## Update - 2026-03-18 (FAST default + live terminal streaming in nanoclaw-web)
+
+### Changes applied on U56E web repo (`~/projects/nanoclaw-web`)
+- Backend debate stream (`app/api/debate/route.ts`)
+  - Added live step lifecycle events:
+    - `step_start` (step metadata before execution)
+    - `step_chunk` (raw stdout/stderr chunks while running)
+    - `step_done` (final step payload with status)
+  - Kept legacy `step` event for backward compatibility.
+  - Added per-step raw output tail guard (`STEP_RAW_TAIL_CHARS=20000`) to avoid unbounded memory.
+  - Added FAST-aware defaults when mode/tier config are omitted:
+    - fallback mode -> `fast`
+    - FAST free-tier fallback -> drafter `kimi-cli`, critic `gemini-cli`
+  - Extended step payload with runtime fields:
+    - `id`, `status`, `startedAt`, `endedAt`, `rawStdout`, `rawStderr`.
+- Frontend workbench (`app/components/NanoClawChat.tsx`)
+  - Default mode now `fast`.
+  - FAST preset applied to free tier:
+    - drafter/rewriter `kimi-cli`
+    - critic `gemini-cli`
+  - FREE preset remains available (Gemini drafter + Qwen critic) when switching to `free`.
+  - Added live “Active Step Terminal” panel:
+    - current step metadata + elapsed time
+    - raw stdout/stderr streaming in real time
+  - Intermediate cards now support in-progress state:
+    - render from `step_start`/`step_chunk`
+    - finalize on `step_done`
+    - include raw terminal output details.
+  - STOP UX improved:
+    - immediate local “stop requested” warning
+    - panel remains visible until stream returns final `STOPPED`/error.
+
+### Validation evidence
+- Build/deploy:
+  - `npm run build` in `~/projects/nanoclaw-web` -> success
+  - `systemctl --user restart nanoclaw-web` -> active
+- Runtime stream checks:
+  - Authenticated stream with payload omitting mode produced:
+    - `run_start` with `"mode":"fast"`
+    - first step used `"agent":"kimi-cli"` for draft
+    - live `step_chunk` events emitted before step completion
+- Stop test:
+  - `POST /api/debate/stop` returned `{"success":true,"stopped":true,...}`
+  - stream ended with `{"status":"STOPPED",...}` in final `done` event.
+
+## Update - 2026-03-18 (FAST prompt parity: writer + critic)
+- Core pipeline FAST mode now passes the original user `goal` text to the FAST round prompt path (writer and critic share the same original prompt context) instead of the normalized summary goal.
+- File changed:
+  - `scripts/lib/pipeline.ts` (`runPipeline` -> `runFastRound(..., rawGoal, ...)`).
+- Rationale:
+  - preserves prompt fidelity for A/B FAST runs while keeping existing normalization metadata for non-FAST flows.
+
+## Update - 2026-03-17 (Debate pipeline optimization critique audit)
+
+### Findings (code audit, no behavior change in this entry)
+- Rewrite quality bottleneck remains in summary compression path:
+  - `summarizeCritique()` still truncates raw critic output before rewrite context (`scripts/lib/pipeline.ts`), increasing blocker-loss risk.
+- Critic performance bottleneck remains unresolved by design:
+  - oversized specs only log warnings via `noteSpecOverCriticBudget()`; no pre-critic compaction/section-targeting path.
+- Prompt bloat risk persists:
+  - `buildPromptSharedContext()` injects full `userNotes` with no size clamp into draft/rewrite/repair prompts.
+- Provider fallback bug:
+  - Gemini fallback branch has an unreachable condition in `callGemini()` (`!useCli && isTrue(GEMINI_USE_CLI)`).
+- Observability cost overhead:
+  - step events include full prompt/output payloads and are always retained in trace memory, inflating long runs.
+
+### Recommended next patch order
+1. Fix unreachable Gemini fallback branch in `providers.ts`.
+2. Replace raw-critique truncation with blocker-first extraction (table rows + short rationale).
+3. Add `userNotes` clamp + optional summarize path (same style as goal normalization).
+4. Add pre-critic size guard path (compact or section-target critic mode) instead of note-only.
+5. Add trace payload mode (`full|compact`) to avoid storing full prompts by default.
+
+### Validation Evidence
+- Checks Run:
+  - targeted static audit of `scripts/lib/pipeline.ts`, `scripts/lib/providers.ts`, `scripts/debate.ts`, `scripts/lib/rubric.ts`
+- Observability Channels Used:
+  - code-path inspection, prompt/flow tracing, retry/timeout branch analysis
+- Failures Found + Fixes:
+  - findings documented; no code behavior modifications in this audit entry
+- Residual Risk:
+  - long-running CLI paths and critique-summary truncation can still produce slow runs and missed blockers
+
+## Update - 2026-03-17 (Priority optimization patch set: 1/2/3 + FAST verifier)
+
+### Scope completed
+- Implemented requested priority patches in core debate pipeline:
+  1. Fixed Gemini fallback logic bug in provider routing.
+  2. Replaced raw-critique truncation handoff with blocker-first rewrite feedback synthesis.
+  3. Added real pre-critic size guard path (section-target reduction instead of note-only).
+- Added FAST correctness micro-call (post-rewrite verifier):
+  - binary PASS/FAIL verification against extracted goal constraints.
+  - verification failures now produce blocking findings in FAST mode.
+- Applied FAST prompt-quality improvements:
+  - critic prompt now enforces correctness-first (Part A) before architecture/Pareto (Part B).
+  - FAST critic now consumes implementation/code-focused view instead of full prose-heavy spec.
+  - FAST rewrite now includes goal-constraint checklist.
+  - FAST rewrite temperature lowered to `0.1`.
+
+### Files changed
+- `scripts/lib/providers.ts`
+- `scripts/lib/pipeline.ts`
+
+### Validation Evidence
+- Checks Run:
+  - `npm run -s test -- src/debate-pipeline.test.ts`
+  - `npx tsc --noEmit --pretty false --target ES2022 --module NodeNext --moduleResolution NodeNext scripts/lib/providers.ts scripts/lib/rubric.ts scripts/lib/pipeline.ts scripts/debate.ts src/debate-pipeline.test.ts`
+- Observability Channels Used:
+  - unit test channel + compile/typecheck + targeted diff/grep verification
+- Failures Found + Fixes:
+  - unreachable Gemini fallback branch removed
+  - rewrite feedback no longer built from raw trimmed critic blobs
+  - pre-critic guard now actively reduces critic input size/context
+  - FAST verification adds explicit correctness gate after rewrite
+- Residual Risk:
+  - verification parser relies on format compliance; malformed verifier output degrades to notes + no synthetic blockers from malformed rows
+
+## Update - 2026-03-17 (Prompt design correctness pass)
+
+### Scope completed
+- Applied prompt-contract fixes to reduce FAST-mode architecture drift and requirement misses:
+  - FAST draft now ignores prior spec seed to avoid anchoring on old context.
+  - Critic prompt now explicitly requires constraint-fidelity check first:
+    - enumerate goal constraints as satisfied/violated/ignored
+    - violated/ignored constraints must be emitted as BLOCKING rows.
+  - Critic prompt now requires line-by-line correctness check for implementation code blocks.
+  - Rewrite feedback handoff narrowed to BLOCKING-only rows (suppresses MINOR/Pareto/style churn).
+
+### Files changed
+- `scripts/lib/pipeline.ts`
+
+### Validation Evidence
+- Checks Run:
+  - `npm run -s test -- src/debate-pipeline.test.ts`
+  - `npx tsc --noEmit --pretty false --target ES2022 --module NodeNext --moduleResolution NodeNext scripts/lib/providers.ts scripts/lib/rubric.ts scripts/lib/pipeline.ts scripts/debate.ts src/debate-pipeline.test.ts`
+- Observability Channels Used:
+  - unit tests + compile/typecheck + prompt-path diff verification
+- Failures Found + Fixes:
+  - no test/typecheck regressions after prompt changes
+- Residual Risk:
+  - critic compliance is still prompt-following dependent; if model ignores table contract, blocker extraction remains degraded.
 

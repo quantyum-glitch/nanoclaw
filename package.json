@@ -22,7 +22,8 @@
     "mesh:approve": "tsx scripts/mesh-approve.ts",
     "mesh:executor": "tsx scripts/mesh-executor.ts",
     "debate": "tsx scripts/debate.ts",
-    "verify:kimi": "tsx scripts/verify-kimi.ts"
+    "verify:kimi": "tsx scripts/verify-kimi.ts",
+    "sync:check": "tsx scripts/check-sync.ts"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",

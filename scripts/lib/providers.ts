@@ -713,14 +713,6 @@ export async function callGemini(
     }
   }
 
-  if (!useCli && isTrue(getEnv('GEMINI_USE_CLI'))) {
-    try {
-      return await callGeminiCli(prompt, options);
-    } catch (err) {
-      errors.push(`gemini-cli: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
   if (errors.length === 0) {
     throw new ProviderAuthError('gemini', 'Missing GEMINI_API_KEY and GEMINI_USE_CLI is not enabled.');
   }
