@@ -17,6 +17,32 @@
   - Origin main: `git ls-remote origin refs/heads/main`
   - U56E: `ssh jam@100.68.120.27 "cd ~/projects/nanoclaw && git rev-parse HEAD"`
 
+## Update - 2026-03-18 (Debate hardening + parity completion)
+- Local NanoClaw repo changes completed and pushed to `origin/main`:
+  - commit: `c77cc905a777a794c2c7c53d67923369de5055c4`
+  - FAST prompt parity enforced in core pipeline: writer + critic in FAST now use original `goal` context.
+  - Added sync utility: `scripts/check-sync.ts` and `npm run sync:check`.
+- U56E NanoClaw repo fast-forwarded to same commit SHA (`c77cc905a777a794c2c7c53d67923369de5055c4`).
+- U56E `nanoclaw-web` live route hardening applied (`~/projects/nanoclaw-web/app/api/debate/route.ts`):
+  - prompt transport now supports prompt-file/stdin fallback before raw arg transport.
+  - CLI-first execution with API fallback on CLI failure.
+  - split parse buffer vs UI tail buffer to avoid truncation-driven parse failures.
+  - FAST critic path uses implementation-focused view and BLOCKING-only rewrite handoff.
+  - step errors include normalized `errorKind` in payload.
+
+### Validation Evidence
+- Checks Run:
+  - `npm run -s test -- src/debate-pipeline.test.ts` (pass)
+  - `npm run -s typecheck` (pass)
+  - `npm run -s sync:check` (pass)
+  - U56E `nanoclaw-web`: `npm run build` (pass), `systemctl --user restart nanoclaw-web` (active), port `3010` listening.
+- Observability Channels Used:
+  - tests/build/typecheck, service status, runtime file grep verification on live U56E route.
+- Failures Found + Fixes:
+  - fixed TypeScript stdin nullability in U56E route by enabling piped stdin and guarded writes.
+- Residual Risk:
+  - U56E `nanoclaw-web` is deployed from a non-git runtime folder, so route changes are not commit-tracked in this NanoClaw repo.
+
 ## Historical Baseline (Preserved)
 
 ### Device Allocation (v9 deployed baseline)
