@@ -43,6 +43,26 @@
 - Residual Risk:
   - U56E `nanoclaw-web` is deployed from a non-git runtime folder, so route changes are not commit-tracked in this NanoClaw repo.
 
+## Update - 2026-03-19 (Workspace reset UX + folded debate panels)
+- Implemented live `nanoclaw-web` UX updates to reduce cross-project context bleed:
+  - Added workspace selector + new workspace starter + soft clear action (clear active prompt/results/context, keep files).
+  - Added persisted workspace file visibility panel (recent run files + `SPEC.md` workspace model).
+  - Debate API now accepts `workspace` and persists artifacts per workspace under `spec-workspaces/<workspace>/`.
+  - Added authenticated `GET /api/debate?workspace=...` for workspace/file listing used by UI.
+- Improved no-scroll workflow:
+  - Added panel visibility controls; default view is minimized except terminal (terminal open, other result panels folded).
+  - `Use Final As Next Prompt` now auto-focuses prompt box and scrolls back to prompt area.
+
+### Validation Evidence
+- Checks Run:
+  - U56E `nanoclaw-web` build: `npm run build` (pass)
+  - service restart: `systemctl --user restart nanoclaw-web` (active)
+  - route/component verification via grep for workspace + panel + scroll features
+- Observability Channels Used:
+  - build/type checks on live web repo, service status, source verification
+- Residual Risk:
+  - Workspace persistence currently has soft clear only (non-destructive by design); explicit file delete UI is not added in this pass.
+
 ## Historical Baseline (Preserved)
 
 ### Device Allocation (v9 deployed baseline)
